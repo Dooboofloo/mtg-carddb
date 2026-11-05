@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mtg-carddb"
+version = "0.1.0"
+description = "Indexed Magic: The Gathering card queries using set operations"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Dooboofloo/mtg-carddb"
+Issues = "https://github.com/Dooboofloo/mtg-carddb/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mtg_carddb"]
