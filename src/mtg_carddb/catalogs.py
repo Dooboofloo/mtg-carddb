@@ -40,11 +40,14 @@ CARD_TYPES = frozenset({
     "Emblem", "Enchantment", "Hero", "Instant", "Kindred",
     "Land", "Phenomenon", "Plane", "Planeswalker", "Scheme",
     "Sorcery", "Stickers", "Token", "Tribal", "Vanguard",
+    "Card", "Event", "Boss",
 })
 
-# Battle types are not present in the consistently documented subtype
-# catalogs. Siege is required for ordinary Battle cards.
-ADDITIONAL_SUBTYPES = frozenset({"Siege"})
+# Source-backed exceptions to the standard subtype catalogs.
+ADDITIONAL_SUBTYPES = frozenset({
+    "Siege",
+    "Cyborg",
+})
 
 
 class CatalogError(ValueError):

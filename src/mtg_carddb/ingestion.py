@@ -29,6 +29,7 @@ class IngestionStats:
     candidates: int
     oracle_cards: int
     historical_observations: int
+    excluded_printings: int = 0
 
 
 def _json_default(value: object) -> list[str]:
@@ -138,10 +139,16 @@ def ingest_printings(
         """)
         printing_count = 0
         candidate_count = 0
+        excluded_count = 0
 
         for printing in printings:
-            candidates = normalize_printing(printing, vocabulary)
             printing_count += 1
+
+            if printing.get("layout") == "art_series":
+                excluded_count += 1
+                continue
+
+            candidates = normalize_printing(printing, vocabulary)
             candidate_count += len(candidates)
             connection.executemany(
                 "INSERT INTO temp.carddb_candidate_spool "
@@ -159,6 +166,9 @@ def ingest_printings(
 
         if printing_count == 0:
             raise IngestionError("empty default_cards printing stream")
+
+        if candidate_count == 0:
+            raise IngestionError("no importable cards after art_series exclusion")
 
         # Validate canonical set IDs *and* codes; no invented set metadata.
         invalid_set = connection.execute("""
@@ -202,7 +212,7 @@ def ingest_printings(
         connection.execute("DROP TABLE temp.carddb_candidate_spool")
         connection.execute("DROP TABLE temp.carddb_history_spool")
         connection.execute("RELEASE SAVEPOINT carddb_ingest")
-        return IngestionStats(printing_count, candidate_count, card_count, observations)
+        return IngestionStats(printing_count, candidate_count, card_count, observations, excluded_count)
     except BaseException:
         connection.execute("ROLLBACK TO SAVEPOINT carddb_ingest")
         connection.execute("RELEASE SAVEPOINT carddb_ingest")

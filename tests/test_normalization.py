@@ -342,3 +342,48 @@ def test_vocab_is_defensive_and_multiword_greedy():
 
     with pytest.raises(NormalizationError):
         vocab.parse("Sorcery")
+
+def test_reversible_same_oracle_id_is_deduplicated(vocab):
+    face = {
+        "oracle_id": "same-oracle",
+        "layout": "normal",
+        "name": "Same Card",
+        "type_line": "Creature — Human",
+        "cmc": 2,
+        "colors": ["U"],
+        "mana_cost": "{1}{U}",
+        "oracle_text": "Draw a card.",
+    }
+    source = printing(
+        layout="reversible_card",
+        card_faces=[dict(face), dict(face)],
+    )
+    del source["oracle_id"]
+
+    candidates = normalize_printing(source, vocab)
+
+    assert len(candidates) == 1
+    assert candidates[0].oracle_id == "same-oracle"
+
+
+def test_reversible_same_id_conflicting_faces_fail(vocab):
+    front = {
+        "oracle_id": "same-oracle",
+        "layout": "normal",
+        "name": "Same Card",
+        "type_line": "Creature — Human",
+        "cmc": 2,
+        "colors": ["U"],
+    }
+    back = dict(front, oracle_text="Different mechanical text.")
+
+    source = printing(
+        layout="reversible_card",
+        card_faces=[front, back],
+    )
+    del source["oracle_id"]
+
+    with pytest.raises(
+        NormalizationError, match="disagree mechanically"
+    ):
+        normalize_printing(source, vocab)

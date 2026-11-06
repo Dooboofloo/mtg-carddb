@@ -24,6 +24,7 @@ class SelectedRepresentative:
     legalities: tuple[Legality, ...]
     mechanics_printing_id: str
     legality_printing_id: str
+    aggregated_formats: frozenset[str] = frozenset()
 
 
 def _rank(candidate: Candidate) -> tuple[bool, bool, int, str]:
@@ -209,22 +210,66 @@ def select_representative(
         if ineligible(candidate) == best_eligibility
     ]
 
-    expected = peers[0].legalities
+    expected_other = tuple(
+        legality
+        for legality in peers[0].legalities
+        if legality.format != "oldschool"
+    )
 
-    for peer in peers[1:]:
-        if peer.legalities != expected:
+    oldschool_states: set[str] = set()
+
+    for peer in peers:
+        assert peer.legalities is not None
+
+        actual_other = tuple(
+            legality
+            for legality in peer.legalities
+            if legality.format != "oldschool"
+        )
+
+        if actual_other != expected_other:
             raise RepresentativeConflictError(
                 f"{oracle_id}: legality disagreement between "
                 f"equally eligible printings "
                 f"{peers[0].printing_id} and {peer.printing_id}"
             )
 
+        for legality in peer.legalities:
+            if legality.format == "oldschool":
+                oldschool_states.add(legality.status)
+
+    if (
+        len(oldschool_states) > 1
+        and not oldschool_states <= {"legal", "not_legal"}
+    ):
+        raise RepresentativeConflictError(
+            f"{oracle_id}: incompatible oldschool legality statuses: "
+            f"{sorted(oldschool_states)}"
+        )
+
     legality_source = min(peers, key=_rank)
     assert legality_source.legalities is not None
 
+    legalities = list(expected_other)
+
+    if oldschool_states:
+        status = (
+            "legal"
+            if "legal" in oldschool_states
+            else next(iter(oldschool_states))
+        )
+        legalities.append(Legality("oldschool", status))
+
+    legalities.sort(key=lambda entry: (entry.format, entry.status))
+
     return SelectedRepresentative(
         card=card,
-        legalities=legality_source.legalities,
+        legalities=tuple(legalities),
         mechanics_printing_id=mechanics.printing_id,
         legality_printing_id=legality_source.printing_id,
+        aggregated_formats=(
+            frozenset({"oldschool"})
+            if len(oldschool_states) > 1
+            else frozenset()
+        ),
     )

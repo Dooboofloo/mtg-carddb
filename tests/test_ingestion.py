@@ -241,3 +241,44 @@ def test_accepts_existing_gzip_bulk_iterator(conn, vocab, tmp_path):
     assert stats.printings == 2
     assert stats.oracle_cards == 1
     assert stats.historical_observations == 2
+
+
+def test_art_series_is_excluded_from_cards_and_history(conn, vocab):
+    art = source(
+        id="art-print",
+        oracle_id="art-oracle",
+        layout="art_series",
+        type_line="Card",
+    )
+    real = source(id="real-print")
+
+    stats = ingest_printings(conn, [art, real], vocab)
+
+    assert stats.printings == 2
+    assert stats.excluded_printings == 1
+    assert stats.candidates == 1
+    assert stats.oracle_cards == 1
+
+    assert conn.execute(
+        "SELECT oracle_id FROM cards"
+    ).fetchall() == [("oracle-1",)]
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM card_set_rarities"
+    ).fetchone()[0] == 1
+
+
+def test_art_only_stream_is_not_a_successful_import(conn, vocab):
+    art = source(
+        layout="art_series",
+        type_line="Card",
+    )
+
+    with pytest.raises(
+        IngestionError, match="no importable cards"
+    ):
+        ingest_printings(conn, [art], vocab)
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM cards"
+    ).fetchone()[0] == 0

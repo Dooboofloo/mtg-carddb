@@ -209,6 +209,19 @@ class TypeVocabulary:
         if len(halves) == 1:
             return supertypes, types, frozenset()
 
+        # Plane subtypes are single locations, though they may be made up of several words.
+        # Preserve the complete source-provided location as a single subtype:
+        # "Plane — New Phyrexia" -> {"New Phyrexia"}.
+        if types == frozenset({"Plane"}):
+            location = halves[1].strip()
+
+            if not location:
+                raise NormalizationError(
+                    f"empty plane subtype in {type_line!r}"
+                )
+
+            return supertypes, types, frozenset({location})
+
         tokens = halves[1].split()
 
         if not tokens:
@@ -410,7 +423,6 @@ def normalize_printing(
             )
 
         result: list[Candidate] = []
-        seen: set[str] = set()
 
         for face_data in raw_faces:
             if not isinstance(face_data, dict):
@@ -422,12 +434,6 @@ def normalize_printing(
                 face_data, "oracle_id", printing_id
             )
 
-            if oracle_id in seen:
-                raise NormalizationError(
-                    f"{printing_id}: duplicate reversible oracle_id"
-                )
-
-            seen.add(oracle_id)
             context = f"{printing_id}/{oracle_id}"
             face = _face(
                 face_data, 0, vocabulary, context
@@ -474,7 +480,21 @@ def normalize_printing(
                 )
             )
 
-        return tuple(result)
+        unique: dict[str, Candidate] = {}
+
+        for candidate in result:
+            previous = unique.get(candidate.oracle_id)
+
+            if previous is not None and previous != candidate:
+                raise NormalizationError(
+                    f"{printing_id}: reversible faces share Oracle ID "
+                    f"{candidate.oracle_id!r} but disagree mechanically"
+                )
+
+            unique[candidate.oracle_id] = candidate
+
+        return tuple(unique.values())
+
 
     oracle_id = _string(
         printing, "oracle_id", printing_id

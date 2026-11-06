@@ -335,3 +335,54 @@ def test_many_consistent_printings_select_deterministically(vocab):
 
     selected = select_representative(reversed(group))
     assert selected.mechanics_printing_id == "print-0000"
+
+
+def test_oldschool_uses_any_eligible_legal_printing(vocab):
+    original = candidate(
+        vocab,
+        id="original",
+        released_at="1994-01-01",
+        legalities={
+            "oldschool": "legal",
+            "modern": "legal",
+        },
+    )
+
+    reprint = candidate(
+        vocab,
+        id="reprint",
+        released_at="2025-01-01",
+        legalities={
+            "oldschool": "not_legal",
+            "modern": "legal",
+        },
+    )
+
+    selected = select_representative([reprint, original])
+    statuses = {
+        legality.format: legality.status
+        for legality in selected.legalities
+    }
+
+    assert statuses["oldschool"] == "legal"
+    assert statuses["modern"] == "legal"
+    assert selected.aggregated_formats == frozenset({"oldschool"})
+
+
+def test_oldschool_other_status_conflicts_still_fail(vocab):
+    left = candidate(
+        vocab,
+        id="left",
+        legalities={"oldschool": "restricted"},
+    )
+    right = candidate(
+        vocab,
+        id="right",
+        legalities={"oldschool": "not_legal"},
+    )
+
+    with pytest.raises(
+        RepresentativeConflictError,
+        match="incompatible oldschool",
+    ):
+        select_representative([left, right])

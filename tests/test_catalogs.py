@@ -424,3 +424,85 @@ def test_write_sets_does_not_commit_callers_transaction(tmp_path):
         assert conn.execute(
             "SELECT COUNT(*) FROM sets"
         ).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "type_line, expected_types, expected_subtypes",
+    [
+        ("Card", {"Card"}, set()),
+        ("Event", {"Event"}, set()),
+        ("Boss", {"Boss"}, set()),
+        ("Plane — Dominaria", {"Plane"}, {"Dominaria"}),
+        ("Plane — New Phyrexia", {"Plane"}, {"New Phyrexia"}),
+        (
+            "Artifact Creature — Cyborg Knight",
+            {"Artifact", "Creature"},
+            {"Cyborg", "Knight"},
+        ),
+        (
+            "Legendary Creature — Time Lord Doctor",
+            {"Creature"},
+            {"Time Lord", "Doctor"},
+        ),
+    ],
+)
+def test_observed_source_type_lines(
+    type_line, expected_types, expected_subtypes
+):
+    data = sample_catalogs()
+
+    # Knight is supplied by the ordinary creature subtype catalog.
+    data["creature-types"] = catalog([
+        *data["creature-types"]["data"],
+        "Knight",
+    ])
+
+    vocabulary = make_type_vocabulary(data)
+    _, types, subtypes = vocabulary.parse(type_line)
+
+    assert types == frozenset(expected_types)
+    assert subtypes == frozenset(expected_subtypes)
+
+
+@pytest.mark.parametrize(
+    "type_line",
+    [
+        "Creature — New Phyrexia",
+        "Plane — ",
+        "Imaginary",
+    ],
+)
+def test_unrecognized_types_still_fail(type_line):
+    from mtg_carddb.normalization import NormalizationError
+
+    vocabulary = make_type_vocabulary(sample_catalogs())
+
+    with pytest.raises(NormalizationError):
+        vocabulary.parse(type_line)
+
+
+def test_realistic_planar_printing_normalizes():
+    from mtg_carddb.normalization import normalize_printing
+
+    vocabulary = make_type_vocabulary(sample_catalogs())
+
+    source = printing(
+        id="plane-print",
+        oracle_id="plane-oracle",
+        layout="planar",
+        name="Example Plane",
+        type_line="Plane — New Phyrexia",
+        cmc=0,
+        colors=[],
+        color_identity=[],
+        mana_cost="",
+        power=None,
+        toughness=None,
+    )
+
+    candidate, = normalize_printing(source, vocabulary)
+
+    assert candidate.to_card().types == frozenset({"Plane"})
+    assert candidate.faces[0].subtypes == frozenset({
+        "New Phyrexia"
+    })
