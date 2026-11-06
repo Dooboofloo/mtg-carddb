@@ -241,7 +241,7 @@ class SQLiteStore:
     def get_set(self, code: str) -> SetInfo | None:
         rows = self._rows(
             "SELECT code, name, set_type, released_at, digital "
-            "FROM sets WHERE code = ?", (code,)
+            "FROM sets WHERE code = ? COLLATE NOCASE", (code,),
         )
         if not rows:
             return None
@@ -251,7 +251,7 @@ class SQLiteStore:
 
     def get_tag(self, slug: str) -> Tag | None:
         # Canonical exact slug wins over any colliding alias.
-        rows = self._rows("SELECT * FROM tags WHERE slug = ?", (slug,))
+        rows = self._rows("SELECT * FROM tags WHERE slug = ? COLLATE NOCASE", (slug,),)
         if not rows:
             rows = self._rows(
                 "SELECT t.* FROM tags AS t JOIN tag_aliases AS a "
@@ -303,14 +303,49 @@ class SQLiteStore:
                     yield tuple(row[field] for field in fields), row["oracle_id"]
             return load
 
+        def aggregate_colors():
+            # Prefer the known whole-card color value.
+            for row in self._rows(
+                "SELECT oracle_id, colors FROM cards WHERE colors IS NOT NULL"
+            ):
+                yield row["colors"], row["oracle_id"]
+
+            # Otherwise combine face colors, but only when every face is known.
+            current = None
+            mask = 0
+            complete = False
+
+            for row in self._rows(
+                "SELECT f.oracle_id, f.colors FROM faces AS f "
+                "JOIN cards AS c ON c.oracle_id = f.oracle_id "
+                "WHERE c.colors IS NULL "
+                "ORDER BY f.oracle_id, f.face_index"
+            ):
+                oracle_id = row["oracle_id"]
+
+                if oracle_id != current:
+                    if current is not None and complete:
+                        yield mask, current
+                    current, mask, complete = oracle_id, 0, True
+
+                if row["colors"] is None:
+                    complete = False
+                else:
+                    mask |= row["colors"]
+
+            if current is not None and complete:
+                yield mask, current
+
         return IndexStore({
-            "name": single("SELECT name AS k, oracle_id FROM cards", casefold=True),
+            "name": single("SELECT name AS k, oracle_id FROM cards "
+                           "UNION ALL SELECT name AS k, oracle_id FROM faces", casefold=True,),
             "layout": single("SELECT layout AS k, oracle_id FROM cards"),
             "identity": single("SELECT color_identity AS k, oracle_id FROM cards"),
             "card_color": single("SELECT colors AS k, oracle_id FROM cards "
                                  "WHERE colors IS NOT NULL"),
             "face_color": single("SELECT colors AS k, oracle_id FROM faces "
-                                 "WHERE colors IS NOT NULL"),
+                                 "WHERE colors IS NOT NULL"),    
+            "aggregate_color": aggregate_colors,
             "mana_value": single("SELECT mana_value AS k, oracle_id FROM cards"),
             "produced_mana": single("SELECT produced_mana AS k, oracle_id FROM cards "
                                     "WHERE produced_mana IS NOT NULL"),

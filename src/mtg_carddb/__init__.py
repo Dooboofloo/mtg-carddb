@@ -1,5 +1,11 @@
-"""Public immutable record types for MTG CardDB."""
+"""MTG CardDB public API."""
 
+from .database import (
+    CardDatabase,
+    UnknownFormatError,
+    UnknownSetError,
+    UnknownTagError,
+)
 from .models import (
     Card,
     CardFace,
@@ -11,8 +17,15 @@ from .models import (
     Tag,
     Tagging,
 )
+from .storage import (
+    AmbiguousTagError,
+    DatabaseClosedError,
+    DatabaseCompatibilityError,
+    DatabaseOpenError,
+)
 
 __all__ = [
+    "CardDatabase",
     "Card",
     "CardFace",
     "DatabaseInfo",
@@ -22,4 +35,11 @@ __all__ = [
     "SourceInfo",
     "Tag",
     "Tagging",
+    "UnknownTagError",
+    "UnknownFormatError",
+    "UnknownSetError",
+    "AmbiguousTagError",
+    "DatabaseClosedError",
+    "DatabaseCompatibilityError",
+    "DatabaseOpenError",
 ]
