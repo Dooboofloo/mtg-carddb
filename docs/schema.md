@@ -15,7 +15,7 @@ MTG CardDB is a local-first Python library for accessing *Magic: The Gathering* 
 - The database describes the card universe without specific assumptions, house bans, favored formats, or other application policies.
 - **Scryfall is the only canonical data source.**
 - No individual printing records are retained. `default_cards` printings are a **transient import representation** used both to select current Oracle-level characteristics and to aggregate historical set/rarity/platform observations. CardDB never persists printing IDs or printing objects.
-- Cards, faces, keywords, colors, tags, legalities, and set/rarity occurrences are **stored facts**. Python indexes and descendant-expanded tag memberships are **derived views**, not duplicated SQL facts.
+- Cards, faces, keywords, colors, the current Scryfall Game Changer flag, tags, legalities, and set/rarity occurrences are **stored facts**. Python indexes and descendant-expanded tag memberships are **derived views**, not duplicated SQL facts.
 - The database represents the current Oracle characteristics and current Scryfall legality statuses **at build time**. It is not an archive of historical Oracle text or historical ban lists.
 - A completed database is treated as **read-only** by consuming applications. Refreshing builds a new database and replaces the existing file only after validation.
 
@@ -41,7 +41,7 @@ The **sole card-record bulk source** is Scryfall's `default_cards` export; `orac
 The importer must **not** use the first printing encountered: row order is not a semantic selection policy. Instead:
 
 1. Stream `default_cards` and extract distinct `(oracle_id, set_id, rarity, game)` observations from **every** printing, including reversible face Oracle IDs. Deduplicate those observations in the staging database.
-2. For every ordinary Scryfall Card with a top-level Oracle ID, form a **current-mechanics projection** containing only persisted gameplay fields (including normalized face properties, card keywords, and legalities). Ignore printing-specific fields such as printing `id`, `set`, `rarity`, collector number, art, and price.
+2. For every ordinary Scryfall Card with a top-level Oracle ID, form a **current-mechanics projection** containing only persisted gameplay fields (including normalized face properties, card keywords, the nullable `game_changer` classification, and legalities). Treat an absent `game_changer` as unknown (`NULL`), not `False`. Ignore printing-specific fields such as printing `id`, `set`, `rarity`, collector number, art, and price.
 3. Normalize known layout-dependent field locations and compare projected values for the same Oracle ID. Compare actual values when present; distinguish genuinely absent data from conflicting provided data. Resolve layout-dependent absences only using a complete, supported source record, never arbitrary merging of unrelated cards.
 4. Select a reproducible representative among compatible candidates: prefer **non-reversible** objects, then `lang == 'en'`, then newest `released_at`, then lexical Scryfall printing `id` as a final tie-breaker. Reversible objects are treated as **separate face-level candidates** for each face's Oracle ID, not as combined card records. This policy does not claim to replicate Scryfall's subjective `oracle_cards` representative choice.
 5. A non-reversible candidate with a complete and valid gameplay projection wins over reversible face candidates. If the only source is a reversible face, accept it only when **all required Oracle-level fields can be resolved unambiguously** from Scryfall-provided information. Otherwise fail the strict build with the affected Oracle ID and missing fields; do not borrow combined root color identity, keywords, or reserved status from a different identity.
@@ -80,7 +80,7 @@ For ordinary split, Adventure, transform, and modal DFC layouts, multiple face r
 - `mana_value` is `REAL` to preserve Scryfall's `cmc`, including unusual fractional values.
 - Mana cost and Oracle text are preserved as source strings. Missing mana cost (`''`) is not the same as `{0}`; `NULL` signifies absent or unavailable source data.
 - Power, toughness, loyalty, defense, and Vanguard modifiers are strings because some values are symbolic (`*`, `X`, etc.). No automatic numeric interpretation is promised in v1.
-- Dates are ISO `YYYY-MM-DD` and timestamps are UTC ISO 8601 text. Booleans are SQLite integers restricted to `0` or `1`.
+- Dates are ISO `YYYY-MM-DD` and timestamps are UTC ISO 8601 text. Booleans are SQLite integers restricted to `0` or `1`; `cards.game_changer` is nullable because absent Scryfall classification data must remain distinguishable from an explicit `False`.
 
 ## 5. Proposed SQLite schema (v1)
 
@@ -100,7 +100,8 @@ CREATE TABLE cards (
     color_identity  INTEGER NOT NULL CHECK (color_identity BETWEEN 0 AND 31),
     colors          INTEGER CHECK (colors BETWEEN 0 AND 31),
     produced_mana   INTEGER CHECK (produced_mana BETWEEN 0 AND 63),
-    reserved        INTEGER NOT NULL CHECK (reserved IN (0, 1))
+    reserved        INTEGER NOT NULL CHECK (reserved IN (0, 1)),
+    game_changer    INTEGER CHECK (game_changer IN (0, 1))
 );
 
 -- Normalized face rows, including one face for ordinarily single-faced cards.
@@ -235,7 +236,7 @@ The importer must enforce (strict builds fail if required guarantees cannot be m
 1. Every card has at least one face, with unique contiguous indices starting at 0.
 2. Every source printing is either accounted for by a normalized Oracle identity (ordinary or reversible face) or produces an explicit actionable error. No Oracle ID has conflicting supplied canonical mechanical characteristics; fields absent only because of a reversible layout are not interpreted as disagreeing values.
 3. `face_types` accurately describes parsed face `type_line` values. Parse the `—` type/subtype separator and match subtype names by **catalog-aware longest match** (for example, **Time Lord**, **Assembly-Worker**), not by whitespace splitting. Supertypes are identified via the Scryfall supertype catalog; other type tokens use a validated Magic card-type vocabulary. Unknown or ambiguous tokens are a validation error, not silently misclassified.
-4. Every legality status belongs to the supported status vocabulary; format identifiers come from Scryfall data, **not** a hardcoded list of favorite formats.
+4. Every legality status belongs to the supported status vocabulary; format identifiers come from Scryfall data, **not** a hardcoded list of favorite formats. The `game_changer` field is imported as `1` for explicit `True`, `0` for explicit `False`, and `NULL` when absent; missing values must not be coerced to `False`.
 5. All tag slugs are unique and parent/child edges form an **acyclic** directed graph. Read `parent_ids` and `child_ids` (which may be missing/null/empty) as the two views of the same directed relationships; when both describe a relationship, verify their consistency. Alias collisions are **permitted in SQL**, recorded as ambiguous in Python, and never resolved by guessing. Canonical exact slugs take precedence over aliases.
 6. `oracle_tags` input is a collection of tag objects (`id`, `slug`, `label`, optional `description`, `aliases`, `parent_ids`, `child_ids`, and nested `taggings`). Oracle taggings reference `oracle_id` and contain `weight` with optional `annotation`. Preserve source-supplied weights as text; no hardcoded ordering or SQL vocabulary constraint is introduced. Validate object type and field types at import time, and reject unexpected required-field omissions with clear diagnostics.
 7. Tagging Oracle IDs and all set/rarity Oracle IDs resolve to imported cards. Dangling references fail a strict build (after a diagnostic report listing affected IDs); no silent deletion or invented replacement identities.
@@ -263,6 +264,7 @@ SQL persists normalized facts; Python builds an inverted index mapping attribute
 | `by_set("m21")` | `sets`, `card_set_rarities` | Cards observed anywhere in that set |
 | `by_rarity("common", game="paper")` | `card_set_rarities` | Ever observed at that rarity/platform |
 | `by_set_rarity("m21", "common", game="paper")` | `card_set_rarities` | Rarity **in that set and game** |
+| `game_changers()` | `cards.game_changer` | Only cards explicitly classified `True`; `False` and `NULL` excluded |
 | `resolve(oracle_ids)` | `cards`, `faces` and related tables | Full card records, retrieved by ID |
 
 These names illustrate intended semantics, not a frozen Python API. The engine may eagerly or lazily hydrate index categories; benchmark the alternatives. A repeated lookup of an already-loaded category should not require SQL. Direct and expanded tag memberships should be cached separately as needed, with duplicate paths deduplicated by set union.
@@ -319,7 +321,7 @@ No automatic network access occurs merely because an application imports the pac
 
 ## 8. Validation and tests
 
-The implementation should include small synthetic fixtures and **captured real Scryfall fixtures** for normal cards, Adventures, split cards, transforming/modal double-faced cards, meld, reversible cards (including repeated names such as `Blood Crypt // Blood Crypt`), empty-versus-missing color data, fractional mana values, multiword subtypes (including `Time Lord`), Vanguard characteristics, tag graph branches, alias collisions, tagging-weight serialization, and multiple rarities in one set. Tests must cover a reversible-only identity with incomplete required fields (strict failure), non-reversible preference, same-ID field conflicts, and stable tie-breaking independent of source record order.
+The implementation should include small synthetic fixtures and **captured real Scryfall fixtures** for normal cards, Adventures, split cards, transforming/modal double-faced cards, meld, reversible cards (including repeated names such as `Blood Crypt // Blood Crypt`), empty-versus-missing color data, fractional mana values, multiword subtypes (including `Time Lord`), Vanguard characteristics, tag graph branches, alias collisions, tagging-weight serialization, and multiple rarities in one set. Tests must cover a reversible-only identity with incomplete required fields (strict failure), non-reversible preference, same-ID field conflicts, stable tie-breaking independent of source record order, and the three distinct `game_changer` states (`1`, `0`, `NULL`).
 
 **Required equivalence property:** for any supported query, the indexed Python result equals the set of Oracle IDs obtained by evaluating the corresponding predicate over normalized source records. Test union, intersection, difference, descendant expansion, and deduplication of multifaced cards. Test that failed imports and failed file replacement leave the original usable database unchanged.
 
@@ -336,7 +338,7 @@ These are now specified as **importer policies and acceptance tests**, rather th
 | 3. Historical completeness | Use **`default_cards` alone** for all observed Oracle/set/rarity/game memberships. It includes the relevant printings without duplicating every language variation; `all_cards` adds localization outside the project scope. Validate distinct tuple counts and the reversible-face expansion. |
 | 4. Tag source encoding | Use the documented Tag/Tagging structure (`id`, `slug`, hierarchy/aliases, nested Oracle-ID taggings with weight/optional annotation). Accept null or absent optional graph/alias arrays. Preserve raw textual weight labels, do not infer ordering, and report unexpected live-export shapes. See §5 and §8. |
 | 5. Type parsing | Keep original type lines and parse face-level fields with a tested **catalog-aware parser**, including multiword names and unusual layouts. Reject unknown/ambiguous classifications; never split all subtype names on spaces. See §5.1. |
-| 6. Public API semantics | Keep the *schema* independent of final API method naming. Public identities use WUBRG strings and `frozenset[str]`; whole-card type membership means **any face**. `cards.colors` vs `faces.colors` remain separate source facts; precise `by_color()` semantics are deferred to API design, not implemented by guessing. See §§4, 6. |
+| 6. Public API semantics | Keep the *schema* independent of final API method naming. Public identities use WUBRG strings and `frozenset[str]`; whole-card type membership means **any face**. `cards.colors` vs `faces.colors` remain separate source facts; aggregate `by_color()` semantics are specified in the companion `api.md`; the persisted root/face values are not rewritten. See §§4, 6. |
 
 ### 9.1 Verification evidence and limitations
 
