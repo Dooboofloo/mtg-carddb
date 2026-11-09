@@ -18,6 +18,11 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .normalization import TypeVocabulary
+from .printed_types import (
+    SUPPLEMENTAL_SUPERTYPES,
+    SUPPLEMENTAL_CARD_TYPES,
+    SUPPLEMENTAL_SUBTYPES,
+)
 
 SETS_URL = "https://api.scryfall.com/sets"
 CATALOG_BASE = "https://api.scryfall.com/catalog/"
@@ -245,7 +250,7 @@ def make_type_vocabulary(
         for name in TYPE_CATALOGS
     }
 
-    subtypes = set(ADDITIONAL_SUBTYPES)
+    subtypes = set(ADDITIONAL_SUBTYPES) | SUPPLEMENTAL_SUBTYPES
     for name in TYPE_CATALOGS:
         if name != "supertypes":
             subtypes.update(parsed[name])
@@ -262,14 +267,14 @@ def make_type_vocabulary(
                 subtypes.update(values)
             else:
                 return TypeVocabulary(
-                    parsed["supertypes"],
-                    CARD_TYPES | values,
+                    parsed["supertypes"] | SUPPLEMENTAL_SUPERTYPES,
+                    CARD_TYPES | SUPPLEMENTAL_CARD_TYPES | values,
                     frozenset(subtypes),
                 )
 
     return TypeVocabulary(
-        parsed["supertypes"],
-        CARD_TYPES,
+        parsed["supertypes"] | SUPPLEMENTAL_SUPERTYPES,
+        CARD_TYPES | SUPPLEMENTAL_CARD_TYPES,
         frozenset(subtypes),
     )
 

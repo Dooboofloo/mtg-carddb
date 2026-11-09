@@ -6,13 +6,14 @@ Type vocabulary is supplied externally from import-time catalogs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from functools import lru_cache
 from math import isfinite
 import re
 from typing import Any, Mapping
 
+from .printed_types import parse_line_alias
 from .models import Card, CardFace, Legality
 
 _COLORS = frozenset("WUBRG")
@@ -62,6 +63,21 @@ def _symbols(
 
     return frozenset(value)
 
+
+def _produced_mana(
+    data: Mapping[str, Any],
+    context: str,
+) -> frozenset[str] | None:
+    """Return WUBRGC production, or unknown for unrepresentable resources."""
+
+    # Sole Performer produces {T}, which is not WUBRGC mana.
+    # None means the six-symbol projection is unavailable.
+    if data.get("produced_mana") == ["T"]:
+        return None
+
+    return _symbols(
+        data, "produced_mana", context, mana=True
+    )
 
 def _boolean(
     data: Mapping[str, Any], key: str, context: str
@@ -178,7 +194,10 @@ class TypeVocabulary:
         if not isinstance(type_line, str) or not type_line:
             raise NormalizationError("missing type line")
 
-        halves = type_line.split(" — ")
+        # Translate known printed terminology for indexing, while retaining
+        # the exact original type_line on the CardFace model.
+        parsed_line = parse_line_alias(type_line)
+        halves = parsed_line.split(" — ")
 
         if len(halves) > 2 or "—" in halves[0]:
             raise NormalizationError(
@@ -332,10 +351,18 @@ def _face(
     index: int,
     vocab: TypeVocabulary,
     context: str,
+    *,
+    allow_missing_type_line: bool = False,
 ) -> CardFace:
     name = _string(data, "name", context)
-    type_line = _string(data, "type_line", context)
-    supertypes, types, subtypes = vocab.parse(type_line)
+
+    if allow_missing_type_line and "type_line" not in data:
+        # The source does not print a type line on this continuation face.
+        type_line = ""
+        supertypes = types = subtypes = frozenset()
+    else:
+        type_line = _string(data, "type_line", context)
+        supertypes, types, subtypes = vocab.parse(type_line)
 
     return CardFace(
         face_index=index,
@@ -460,11 +487,8 @@ def normalize_printing(
                     color_identity=_symbols(
                         face_data, "color_identity", context
                     ),
-                    produced_mana=_symbols(
-                        face_data,
-                        "produced_mana",
-                        context,
-                        mana=True,
+                    produced_mana=_produced_mana(
+                        face_data, context
                     ),
                     reserved=_boolean(
                         face_data, "reserved", context
@@ -486,6 +510,62 @@ def normalize_printing(
             previous = unique.get(candidate.oracle_id)
 
             if previous is not None and previous != candidate:
+                # Some reversible printings of Adventures present the
+                # creature and Adventure faces separately, but both faces
+                # reference the SAME Oracle identity.
+                if (
+                    previous.layout == candidate.layout == "adventure"
+                    and previous.name != candidate.name
+                ):
+                    if previous.mana_value != candidate.mana_value:
+                        raise NormalizationError(
+                            f"{printing_id}: shared-ID adventure faces "
+                            "have different mana values"
+                        )
+
+                    front = previous.faces[0]
+                    back = replace(
+                        candidate.faces[0],
+                        face_index=1,
+                    )
+
+                    # These reversible printings duplicate the creature's
+                    # Oracle text on the Adventure face. That value cannot
+                    # reliably describe the Adventure's actual rules text.
+                    # Preserve absence rather than store a false fact.
+                    if back.oracle_text == front.oracle_text:
+                        back = replace(back, oracle_text=None)
+
+                    unique[candidate.oracle_id] = replace(
+                        previous,
+                        name=f"{previous.name} // {candidate.name}",
+                        type_line=(
+                            f"{previous.type_line} // {candidate.type_line}"
+                        ),
+                        layout="adventure",
+                        colors=_symbols(
+                            printing, "colors", printing_id
+                        ),
+                        color_identity=_symbols(
+                            printing, "color_identity", printing_id
+                        ),
+                        produced_mana=_produced_mana(
+                            printing, printing_id
+                        ),
+                        keywords=_keywords(printing, printing_id),
+                        reserved=_boolean(
+                            printing, "reserved", printing_id
+                        ),
+                        game_changer=_boolean(
+                            printing, "game_changer", printing_id
+                        ),
+                        legalities=_legality_map(
+                            printing, printing_id
+                        ),
+                        faces=(front, back),
+                    )
+                    continue
+
                 raise NormalizationError(
                     f"{printing_id}: reversible faces share Oracle ID "
                     f"{candidate.oracle_id!r} but disagree mechanically"
@@ -509,18 +589,35 @@ def normalize_printing(
             raise NormalizationError(
                 f"{printing_id}: invalid card_faces"
             )
+  
+        faces_list: list[CardFace] = []
 
-        faces = tuple(
-            _face(
-                value,
-                index,
-                vocabulary,
-                f"{printing_id}/face{index}",
+        for index, value in enumerate(raw_faces):
+            if not isinstance(value, dict):
+                _invalid_face(printing_id, index)
+
+            is_continuation = (
+                layout == "double_faced_token"
+                and len(raw_faces) == 2
+                and index == 1
+                and printing.get("type_line") == "Card"
+                and isinstance(raw_faces[0], dict)
+                and raw_faces[0].get("type_line") == "Card"
+                and isinstance(value.get("name"), str)
+                and value["name"].casefold().endswith("(cont'd)")
             )
-            if isinstance(value, dict)
-            else _invalid_face(printing_id, index)
-            for index, value in enumerate(raw_faces)
-        )
+
+            faces_list.append(
+                _face(
+                    value,
+                    index,
+                    vocabulary,
+                    f"{printing_id}/face{index}",
+                    allow_missing_type_line=is_continuation,
+                )
+            )
+
+        faces = tuple(faces_list)
 
     return (
         Candidate(
@@ -545,11 +642,8 @@ def normalize_printing(
             color_identity=_symbols(
                 printing, "color_identity", printing_id
             ),
-            produced_mana=_symbols(
-                printing,
-                "produced_mana",
-                printing_id,
-                mana=True,
+            produced_mana=_produced_mana(
+                printing, printing_id
             ),
             reserved=_boolean(
                 printing, "reserved", printing_id

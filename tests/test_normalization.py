@@ -387,3 +387,159 @@ def test_reversible_same_id_conflicting_faces_fail(vocab):
         NormalizationError, match="disagree mechanically"
     ):
         normalize_printing(source, vocab)
+
+
+def test_minigame_continuation_preserves_missing_type(vocab):
+    from mtg_carddb.catalogs import make_type_vocabulary
+    from test_catalogs import sample_catalogs
+
+    vocabulary = make_type_vocabulary(sample_catalogs())
+
+    source = printing(
+        layout="double_faced_token",
+        name="Example Game // Example Game (cont'd)",
+        type_line="Card",
+        cmc=0,
+        colors=None,
+        color_identity=[],
+        keywords=[],
+        card_faces=[
+            {
+                "name": "Example Game",
+                "type_line": "Card",
+                "colors": [],
+                "oracle_text": "Game instructions.",
+            },
+            {
+                "name": "Example Game (cont'd)",
+                "colors": [],
+                "oracle_text": "Continued instructions.",
+            },
+        ],
+    )
+
+    card = normalize_printing(source, vocabulary)[0].to_card()
+
+    assert len(card.faces) == 2
+    assert card.faces[1].type_line == ""
+    assert card.faces[1].types == frozenset()
+    assert card.faces[1].oracle_text == "Continued instructions."
+    assert card.types == frozenset({"Card"})
+
+
+def test_missing_type_on_unrelated_back_face_still_fails(vocab):
+    source = printing(
+        layout="transform",
+        card_faces=[
+            {"name": "Front", "type_line": "Creature"},
+            {"name": "Back"},
+        ],
+    )
+
+    with pytest.raises(
+        NormalizationError, match="type_line"
+    ):
+        normalize_printing(source, vocab)
+
+
+def test_nonmana_t_symbol_is_not_colorless_mana(vocab):
+    card = normalize_printing(
+        printing(produced_mana=["T"]), vocab
+    )[0].to_card()
+
+    assert card.produced_mana is None
+
+    normal = normalize_printing(
+        printing(produced_mana=[]), vocab
+    )[0].to_card()
+
+    assert normal.produced_mana == frozenset()
+
+
+def test_unexpected_mixed_mana_symbols_still_fail(vocab):
+    with pytest.raises(
+        NormalizationError, match="produced_mana"
+    ):
+        normalize_printing(
+            printing(produced_mana=["W", "T"]), vocab
+        )
+
+
+def example_reversible_adventure():
+    source = printing(
+        id="reversible-adventure",
+        name="Guardian // Ritual // Guardian",
+        layout="reversible_card",
+        type_line=None,
+        cmc=3,
+        colors=None,
+        color_identity=["U"],
+        keywords=["Flying"],
+        card_faces=[
+            {
+                "oracle_id": "oracle-1",
+                "layout": "adventure",
+                "name": "Guardian",
+                "type_line": "Creature — Human",
+                "cmc": 3,
+                "colors": ["U"],
+                "mana_cost": "{2}{U}",
+                "oracle_text": "Creature ability.",
+            },
+            {
+                "oracle_id": "oracle-1",
+                "layout": "adventure",
+                "name": "Ritual",
+                "type_line": "Sorcery — Arcane",
+                "cmc": 3,
+                "colors": ["U"],
+                "mana_cost": "{U}",
+                "oracle_text": "Creature ability.",
+            },
+        ],
+    )
+    del source["oracle_id"]
+    return source
+
+
+def test_reversible_adventure_preserves_shared_identity():
+    vocabulary = TypeVocabulary(
+        supertypes={"Legendary"},
+        card_types={"Creature", "Sorcery"},
+        subtypes={"Human", "Arcane"},
+    )
+
+    candidate, = normalize_printing(
+        example_reversible_adventure(), vocabulary
+    )
+
+    assert candidate.oracle_id == "oracle-1"
+    assert candidate.reversible is True
+    assert candidate.layout == "adventure"
+    assert candidate.name == "Guardian // Ritual"
+    assert candidate.type_line == (
+        "Creature — Human // Sorcery — Arcane"
+    )
+    assert candidate.missing == frozenset()
+    assert len(candidate.faces) == 2
+    assert candidate.faces[1].oracle_text is None
+
+    card = candidate.to_card()
+    assert card.types == frozenset({"Creature", "Sorcery"})
+    assert card.faces[1].name == "Ritual"
+
+
+def test_reversible_adventure_conflicting_mana_values_fail():
+    vocabulary = TypeVocabulary(
+        supertypes=set(),
+        card_types={"Creature", "Sorcery"},
+        subtypes={"Human", "Arcane"},
+    )
+
+    source = example_reversible_adventure()
+    source["card_faces"][1]["cmc"] = 4
+
+    with pytest.raises(
+        NormalizationError, match="different mana values"
+    ):
+        normalize_printing(source, vocabulary)

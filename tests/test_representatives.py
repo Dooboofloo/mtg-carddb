@@ -386,3 +386,55 @@ def test_oldschool_other_status_conflicts_still_fail(vocab):
         match="incompatible oldschool",
     ):
         select_representative([left, right])
+
+
+def test_ordinary_adventure_wins_over_reversible_presentation():
+    from mtg_carddb.normalization import TypeVocabulary
+    from test_normalization import example_reversible_adventure
+
+    vocabulary = TypeVocabulary(
+        supertypes=set(),
+        card_types={"Creature", "Sorcery"},
+        subtypes={"Human", "Arcane"},
+    )
+
+    reversible, = normalize_printing(
+        example_reversible_adventure(), vocabulary
+    )
+
+    ordinary = printing(
+        id="ordinary-adventure",
+        name="Guardian // Ritual",
+        layout="adventure",
+        type_line="Creature — Human // Sorcery — Arcane",
+        cmc=3,
+        colors=None,
+        color_identity=["U"],
+        keywords=["Flying"],
+        card_faces=[
+            {
+                "name": "Guardian",
+                "type_line": "Creature — Human",
+                "colors": ["U"],
+                "mana_cost": "{2}{U}",
+                "oracle_text": "Creature ability.",
+            },
+            {
+                "name": "Ritual",
+                "type_line": "Sorcery — Arcane",
+                "colors": ["U"],
+                "mana_cost": "{U}",
+                "oracle_text": "Actual Ritual spell effect.",
+            },
+        ],
+    )
+
+    normal, = normalize_printing(ordinary, vocabulary)
+
+    selected = select_representative([reversible, normal])
+
+    assert selected.mechanics_printing_id == "ordinary-adventure"
+    assert selected.card.faces[1].oracle_text == (
+        "Actual Ritual spell effect."
+    )
+    assert selected.card.layout == "adventure"
