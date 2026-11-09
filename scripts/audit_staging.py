@@ -23,6 +23,7 @@ from mtg_carddb.normalization import TypeVocabulary, normalize_printing
 from mtg_carddb.oracle_tags import ingest_oracle_tags, iter_oracle_tags
 from mtg_carddb.representatives import select_representative
 from mtg_carddb.schema import staging_database
+from mtg_carddb.import_policy import exclude_art_only_taggings, find_art_only_oracle_ids
 
 
 def printing_oracle_ids(printing: dict[str, Any]) -> set[str]:
@@ -262,7 +263,7 @@ def audit_full_build(
 
         tag_stats = ingest_oracle_tags(
             conn,
-            filtered_tags(
+            exclude_art_only_taggings(
                 iter_oracle_tags(tags_path),
                 art_only_ids,
                 excluded_by_tag,
@@ -370,6 +371,16 @@ def main() -> int:
             references.vocabulary,
             directory / "candidates.sqlite",
         )
+
+        policy_art_only = find_art_only_oracle_ids(
+            iter_default_cards(args.cards)
+        )
+
+        if policy_art_only != art_only:
+            raise RuntimeError(
+                "production art-series exclusion policy "
+                "disagrees with representative audit"
+            )
 
         print("Checking Oracle-tag references ...", flush=True)
 
