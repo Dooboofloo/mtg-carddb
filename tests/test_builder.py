@@ -1,0 +1,249 @@
+"""Offline tests for the non-activating snapshot builder."""
+
+from contextlib import contextmanager
+from types import SimpleNamespace
+import sqlite3
+
+import pytest
+
+from mtg_carddb import builder
+from mtg_carddb.builder import (
+    SnapshotBuildError,
+    _validate_counts,
+    _validate_integrity,
+    build_snapshot,
+)
+
+
+def test_builder_never_overwrites_existing_output(tmp_path):
+    cards = tmp_path / "cards.jsonl.gz"
+    tags = tmp_path / "tags.jsonl.gz"
+    target = tmp_path / "existing.sqlite"
+
+    cards.touch()
+    tags.touch()
+    target.write_bytes(b"important existing database")
+
+    with pytest.raises(FileExistsError):
+        build_snapshot(cards, tags, target)
+
+    assert target.read_bytes() == b"important existing database"
+
+
+def test_builder_rejects_missing_source_without_creating_output(
+    tmp_path,
+):
+    target = tmp_path / "missing.sqlite"
+
+    with pytest.raises(FileNotFoundError):
+        build_snapshot(
+            tmp_path / "missing-cards.jsonl.gz",
+            tmp_path / "missing-tags.jsonl.gz",
+            target,
+        )
+
+    assert not target.exists()
+
+
+def test_builder_deletes_failed_staging_file(
+    tmp_path, monkeypatch,
+):
+    cards = tmp_path / "cards.jsonl.gz"
+    tags = tmp_path / "tags.jsonl.gz"
+    target = tmp_path / "staging.sqlite"
+
+    cards.touch()
+    tags.touch()
+
+    monkeypatch.setattr(
+        builder,
+        "iter_default_cards",
+        lambda _: iter([
+            {"layout": "normal", "oracle_id": "real"}
+        ]),
+    )
+    monkeypatch.setattr(
+        builder, "write_sets", lambda *_: 0
+    )
+
+    def fail_import(*_):
+        raise ValueError("synthetic import failure")
+
+    monkeypatch.setattr(
+        builder, "ingest_printings", fail_import
+    )
+
+    with pytest.raises(
+        ValueError, match="synthetic import failure"
+    ):
+        build_snapshot(
+            cards,
+            tags,
+            target,
+            references=SimpleNamespace(
+                sets=(),
+                vocabulary=object(),
+            ),
+        )
+
+    assert not target.exists()
+
+
+def test_builder_filters_only_art_ids_and_keeps_snapshot(
+    tmp_path, monkeypatch,
+):
+    cards = tmp_path / "cards.jsonl.gz"
+    tags = tmp_path / "tags.jsonl.gz"
+    target = tmp_path / "new.sqlite"
+
+    cards.touch()
+    tags.touch()
+
+    printings = [
+        {"layout": "art_series", "oracle_id": "art-only"},
+        {"layout": "normal", "oracle_id": "real"},
+    ]
+
+    monkeypatch.setattr(
+        builder,
+        "iter_default_cards",
+        lambda _: iter(printings),
+    )
+    monkeypatch.setattr(
+        builder, "write_sets", lambda *_: 1
+    )
+
+    def fake_cards(_conn, source, _vocabulary):
+        assert list(source) == printings
+
+        return SimpleNamespace(
+            printings=2,
+            excluded_printings=1,
+            oracle_cards=1,
+            historical_observations=0,
+        )
+
+    monkeypatch.setattr(
+        builder, "ingest_printings", fake_cards
+    )
+
+    monkeypatch.setattr(
+        builder,
+        "iter_oracle_tags",
+        lambda _: iter([{
+            "slug": "test",
+            "taggings": [
+                {"oracle_id": "real"},
+                {"oracle_id": "art-only"},
+            ],
+        }]),
+    )
+
+    def fake_tags(_conn, source):
+        tags_received = list(source)
+
+        assert tags_received[0]["taggings"] == [
+            {"oracle_id": "real"}
+        ]
+
+        return SimpleNamespace(tags=1, taggings=1)
+
+    monkeypatch.setattr(
+        builder, "ingest_oracle_tags", fake_tags
+    )
+
+    # Mocked importers don't write actual rows. The real row-count
+    # checks are exercised by the full-data integration run.
+    monkeypatch.setattr(
+        builder,
+        "_validate_counts",
+        lambda *_args, **_kwargs: None,
+    )
+
+    class FakeDatabase:
+        def __len__(self):
+            return 1
+
+        def all_cards(self):
+            return frozenset({"real"})
+
+        def by_type(self, _type):
+            return frozenset({"real"})
+
+    @contextmanager
+    def fake_open(path):
+        assert path == target
+        yield FakeDatabase()
+
+    monkeypatch.setattr(
+        builder.CardDatabase, "open", fake_open
+    )
+
+    result = build_snapshot(
+        cards,
+        tags,
+        target,
+        references=SimpleNamespace(
+            sets=(),
+            vocabulary=object(),
+        ),
+    )
+
+    assert result.path == target
+    assert result.cards == 1
+    assert result.art_only_oracle_ids == 1
+    assert result.excluded_art_taggings == 1
+    assert target.is_file()
+
+    with sqlite3.connect(target) as db:
+        assert db.execute(
+            "SELECT builder_version "
+            "FROM database_metadata WHERE id=1"
+        ).fetchone() == ("snapshot-builder-v1",)
+
+
+def test_row_count_validation_rejects_mismatch():
+    with sqlite3.connect(":memory:") as db:
+        for table in (
+            "sets",
+            "cards",
+            "card_set_rarities",
+            "tags",
+            "card_tags",
+        ):
+            db.execute(
+                f"CREATE TABLE {table} (id TEXT)"
+            )
+
+        with pytest.raises(
+            SnapshotBuildError,
+            match="cards: expected 1",
+        ):
+            _validate_counts(
+                db,
+                sets=0,
+                cards=1,
+                historical_observations=0,
+                tags=0,
+                taggings=0,
+            )
+
+
+def test_integrity_validation_rejects_foreign_key_violation():
+    with sqlite3.connect(":memory:") as db:
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute(
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY)"
+        )
+        db.execute(
+            "CREATE TABLE child "
+            "(parent_id INTEGER REFERENCES parent(id))"
+        )
+        db.execute(
+            "INSERT INTO child VALUES (999)"
+        )
+
+        with pytest.raises(
+            SnapshotBuildError, match="foreign-key"
+        ):
+            _validate_integrity(db)
