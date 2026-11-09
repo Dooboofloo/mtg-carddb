@@ -138,7 +138,7 @@ def test_bad_set_metadata_is_an_atomic_failure(conn, vocab):
 
 
 def test_missing_games_or_set_or_rarity_is_error(conn, vocab):
-    for changes in ({"games": []}, {"games": "paper"}, {"set": ""}, {"set_id": None}, {"rarity": None}):
+    for changes in ({"games": None}, {"games": "paper"}, {"set": ""}, {"set_id": None}, {"rarity": None}):
         with pytest.raises(IngestionError):
             ingest_printings(conn, [source(**changes)], vocab)
         assert conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0
@@ -282,3 +282,51 @@ def test_art_only_stream_is_not_a_successful_import(conn, vocab):
     assert conn.execute(
         "SELECT COUNT(*) FROM cards"
     ).fetchone()[0] == 0
+
+
+def test_empty_games_keeps_card_without_platform_history(conn, vocab):
+    stats = ingest_printings(
+        conn,
+        [source(games=[])],
+        vocab,
+    )
+
+    assert stats.printings == 1
+    assert stats.oracle_cards == 1
+    assert stats.historical_observations == 0
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM cards"
+    ).fetchone()[0] == 1
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM card_set_rarities"
+    ).fetchone()[0] == 0
+
+
+def test_empty_games_does_not_invent_paper_history(conn, vocab):
+    stats = ingest_printings(
+        conn,
+        [
+            source(id="unavailable", games=[]),
+            source(
+                id="available",
+                set_id="sid2",
+                set="m21",
+                rarity="rare",
+                games=["paper"],
+            ),
+        ],
+        vocab,
+    )
+
+    assert stats.oracle_cards == 1
+    assert stats.historical_observations == 1
+
+    actual = conn.execute(
+        "SELECT s.code, h.rarity, h.game "
+        "FROM card_set_rarities AS h "
+        "JOIN sets AS s ON s.set_id = h.set_id"
+    ).fetchall()
+
+    assert actual == [("m21", "rare", "paper")]

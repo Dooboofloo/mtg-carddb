@@ -85,8 +85,10 @@ def _history(
     games = printing.get("games")
     if (
         not isinstance(games, list)
-        or not games
-        or any(not isinstance(game, str) or not game for game in games)
+        or any(
+            not isinstance(game, str) or not game
+            for game in games
+        )
     ):
         raise IngestionError(
             f"printing {printing.get('id', '<missing>')!r}: invalid games"

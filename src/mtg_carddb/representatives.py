@@ -62,6 +62,12 @@ _FACE_FIELDS = (
     "life_modifier",
 )
 
+_OLDSCHOOL_PRIORITY = {
+    "not_legal": 0,
+    "legal": 1,
+    "restricted": 2,
+    "banned": 3,
+}
 
 def _validate_consistency(
     group: tuple[Candidate, ...],
@@ -238,25 +244,17 @@ def select_representative(
             if legality.format == "oldschool":
                 oldschool_states.add(legality.status)
 
-    if (
-        len(oldschool_states) > 1
-        and not oldschool_states <= {"legal", "not_legal"}
-    ):
-        raise RepresentativeConflictError(
-            f"{oracle_id}: incompatible oldschool legality statuses: "
-            f"{sorted(oldschool_states)}"
-        )
-
     legality_source = min(peers, key=_rank)
     assert legality_source.legalities is not None
 
     legalities = list(expected_other)
 
     if oldschool_states:
-        status = (
-            "legal"
-            if "legal" in oldschool_states
-            else next(iter(oldschool_states))
+        # An ineligible printing does not override an eligible one.
+        # Among eligible printings, retain the strongest restriction.
+        status = max(
+            oldschool_states,
+            key=_OLDSCHOOL_PRIORITY.__getitem__,
         )
         legalities.append(Legality("oldschool", status))
 

@@ -2,6 +2,7 @@
 
 import pytest
 
+from mtg_carddb.models import Legality
 from mtg_carddb.normalization import (
     NormalizationError,
     normalize_printing,
@@ -369,23 +370,26 @@ def test_oldschool_uses_any_eligible_legal_printing(vocab):
     assert selected.aggregated_formats == frozenset({"oldschool"})
 
 
-def test_oldschool_other_status_conflicts_still_fail(vocab):
-    left = candidate(
+def test_oldschool_restricted_beats_ineligible_reprint(vocab):
+    restricted = candidate(
         vocab,
-        id="left",
+        id="original",
         legalities={"oldschool": "restricted"},
     )
-    right = candidate(
+    ineligible = candidate(
         vocab,
-        id="right",
+        id="reprint",
         legalities={"oldschool": "not_legal"},
     )
 
-    with pytest.raises(
-        RepresentativeConflictError,
-        match="incompatible oldschool",
-    ):
-        select_representative([left, right])
+    selected = select_representative(
+        [ineligible, restricted]
+    )
+
+    assert selected.legalities == (
+        Legality("oldschool", "restricted"),
+    )
+    assert selected.aggregated_formats == frozenset({"oldschool"})
 
 
 def test_ordinary_adventure_wins_over_reversible_presentation():
@@ -438,3 +442,77 @@ def test_ordinary_adventure_wins_over_reversible_presentation():
         "Actual Ritual spell effect."
     )
     assert selected.card.layout == "adventure"
+
+
+def test_oldschool_banned_beats_ineligible_reprint(vocab):
+    selected = select_representative([
+        candidate(
+            vocab,
+            id="original",
+            legalities={"oldschool": "banned"},
+        ),
+        candidate(
+            vocab,
+            id="reprint",
+            legalities={"oldschool": "not_legal"},
+        ),
+    ])
+
+    assert selected.legalities == (
+        Legality("oldschool", "banned"),
+    )
+
+
+def test_oldschool_restriction_wins_over_legal_printing(vocab):
+    group = [
+        candidate(
+            vocab,
+            id="legal-print",
+            legalities={"oldschool": "legal"},
+        ),
+        candidate(
+            vocab,
+            id="restricted-print",
+            legalities={"oldschool": "restricted"},
+        ),
+        candidate(
+            vocab,
+            id="ineligible-print",
+            legalities={"oldschool": "not_legal"},
+        ),
+    ]
+
+    assert select_representative(group).legalities == (
+        Legality("oldschool", "restricted"),
+    )
+
+
+def test_oldschool_aggregation_is_order_independent(vocab):
+    group = [
+        candidate(
+            vocab,
+            id="a",
+            legalities={"oldschool": "not_legal"},
+        ),
+        candidate(
+            vocab,
+            id="b",
+            legalities={"oldschool": "legal"},
+        ),
+        candidate(
+            vocab,
+            id="c",
+            legalities={"oldschool": "restricted"},
+        ),
+        candidate(
+            vocab,
+            id="d",
+            legalities={"oldschool": "banned"},
+        ),
+    ]
+
+    assert (
+        select_representative(group).legalities
+        == select_representative(reversed(group)).legalities
+        == (Legality("oldschool", "banned"),)
+    )
