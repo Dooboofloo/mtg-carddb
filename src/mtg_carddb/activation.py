@@ -6,6 +6,9 @@ for writing. Replacement happens with one same-directory os.replace call.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import hashlib
+import stat
 from contextlib import closing
 import os
 from pathlib import Path
@@ -18,6 +21,113 @@ from .database import CardDatabase
 
 class SnapshotActivationError(RuntimeError):
     """A snapshot could not be verified or safely activated."""
+
+
+@dataclass(frozen=True, slots=True)
+class TargetState:
+    """Identity, metadata and bytes of the database being updated."""
+
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    sha256: str
+
+
+def _file_identity(
+    info: os.stat_result,
+) -> tuple[int, int, int, int, int]:
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def capture_target_state(
+    path: str | Path,
+) -> TargetState:
+    """Fingerprint an installed database and reject unstable inputs."""
+
+    target = Path(path)
+
+    if target.is_symlink():
+        raise SnapshotActivationError(
+            f"database target is a symlink: {target}"
+        )
+
+    digest = hashlib.sha256()
+
+    try:
+        with target.open("rb") as stream:
+            before = os.fstat(stream.fileno())
+
+            if not stat.S_ISREG(before.st_mode):
+                raise SnapshotActivationError(
+                    "database target is not a regular file: "
+                    f"{target}"
+                )
+
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+
+            after = os.fstat(stream.fileno())
+
+        current = target.stat()
+
+    except OSError as exc:
+        raise SnapshotActivationError(
+            f"cannot fingerprint database target {target}: {exc}"
+        ) from exc
+
+    if (
+        target.is_symlink()
+        or _file_identity(before) != _file_identity(after)
+        or _file_identity(after) != _file_identity(current)
+    ):
+        raise SnapshotActivationError(
+            f"database target changed during fingerprint: {target}"
+        )
+
+    return TargetState(
+        *_file_identity(after),
+        digest.hexdigest(),
+    )
+
+
+def _check_target_state(
+    target: Path,
+    expected: TargetState,
+) -> None:
+    """Refuse activation when the installed file no longer matches."""
+
+    if capture_target_state(target) != expected:
+        raise SnapshotActivationError(
+            f"database target changed during update: {target}; "
+            "the existing target was not replaced"
+        )
+
+
+def _reject_sidecars(
+    source: Path,
+    target: Path,
+) -> None:
+    """Reject SQLite databases with pending WAL or journal files."""
+
+    for database_path in (source, target):
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(
+                str(database_path) + suffix
+            )
+
+            if sidecar.exists():
+                raise SnapshotActivationError(
+                    "SQLite sidecar present; close/checkpoint "
+                    f"database first: {sidecar}"
+                )
 
 
 def _validate_snapshot(path: Path) -> None:
@@ -71,6 +181,7 @@ def activate_snapshot(
     target_path: str | Path,
     *,
     replace_existing: bool = True,
+    expected_target_state: TargetState | None = None,
 ) -> Path:
     """Atomically activate a verified snapshot at an explicit destination.
 
@@ -86,6 +197,17 @@ def activate_snapshot(
     """
     if type(replace_existing) is not bool:
         raise TypeError("replace_existing must be a bool")
+
+    if expected_target_state is not None:
+        if not isinstance(expected_target_state, TargetState):
+            raise TypeError(
+                "expected_target_state must be TargetState or None"
+            )
+
+        if not replace_existing:
+            raise ValueError(
+                "a target fingerprint is only valid for replacement"
+            )
 
     source = Path(snapshot_path)
     target = Path(target_path)
@@ -138,17 +260,15 @@ def activate_snapshot(
     staged: Path | None = None
 
     try:
-        # A database with pending journal/WAL data cannot safely
-        # be activated by copying or replacing its main file alone.
-        for database_path in (source, target):
-            for suffix in ("-wal", "-shm", "-journal"):
-                sidecar = Path(str(database_path) + suffix)
+        # The candidate and destination must not have pending
+        # WAL or journal data.
+        _reject_sidecars(source, target)
 
-                if sidecar.exists():
-                    raise SnapshotActivationError(
-                        "SQLite sidecar present; close/checkpoint "
-                        f"database first: {sidecar}"
-                    )
+        if expected_target_state is not None:
+            _check_target_state(
+                target,
+                expected_target_state,
+            )
 
         # Always stage in the target directory so replacement
         # occurs on the same filesystem.
@@ -173,6 +293,16 @@ def activate_snapshot(
 
         # Validate the exact bytes that will be activated.
         _validate_snapshot(staged)
+
+        # Detect external changes during validation as late
+        # as possible, before replacing the installed file.
+        _reject_sidecars(source, target)
+
+        if expected_target_state is not None:
+            _check_target_state(
+                target,
+                expected_target_state,
+            )
 
         try:
             if replace_existing:

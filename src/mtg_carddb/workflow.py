@@ -17,7 +17,7 @@ from typing import Iterator, Literal
 from collections.abc import Callable
 
 from .acquisition import acquire_bulk_sources
-from .activation import activate_snapshot
+from .activation import activate_snapshot, capture_target_state
 from .builder import SnapshotBuildResult, build_snapshot
 from .reference_sources import capture_reference_sources
 from .database import CardDatabase
@@ -170,7 +170,25 @@ def _run(
             )
 
     with _workflow_lock(target):
+        # Capture the identity before validating, so an external
+        # edit during schema inspection is detectable too.
+        original_target_state = (
+            capture_target_state(target)
+            if update
+            else None
+        )
+
         _check_target(target, update=update)
+
+        if original_target_state is not None:
+            if (
+                capture_target_state(target)
+                != original_target_state
+            ):
+                raise DatabaseWorkflowError(
+                    "database target changed during "
+                    f"initial validation: {target}"
+                )
 
         with TemporaryDirectory(
             prefix=f".{target.stem}-build-",
@@ -219,6 +237,7 @@ def _run(
                 built.path,
                 target,
                 replace_existing=update,
+                expected_target_state=original_target_state,
             )
 
             report("activation", "complete")

@@ -415,3 +415,61 @@ def test_failed_initial_callback_is_nonfatal_and_disabled(
     assert target.read_bytes() == b"new database"
     assert len(received) == 1
     assert "progress callback failed" in caplog.text
+
+
+def test_update_rejects_external_change_before_activation(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"old database")
+
+    original_activate = workflow.activate_snapshot
+
+    def external_edit_then_activate(*args, **kwargs):
+        # After the final compatibility check, but before
+        # activation's own fingerprint guard.
+        target.write_bytes(b"external edit")
+        return original_activate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        workflow,
+        "activate_snapshot",
+        external_edit_then_activate,
+    )
+
+    with pytest.raises(
+        activation.SnapshotActivationError,
+        match="changed during update",
+    ):
+        update_database(target)
+
+    assert target.read_bytes() == b"external edit"
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_init_has_no_target_fingerprint(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+
+    target = tmp_path / "carddb.sqlite"
+    original = workflow.activate_snapshot
+    fingerprints = []
+
+    def check(*args, **kwargs):
+        fingerprints.append(
+            kwargs["expected_target_state"]
+        )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        workflow,
+        "activate_snapshot",
+        check,
+    )
+
+    initialize_database(target)
+
+    assert fingerprints == [None]

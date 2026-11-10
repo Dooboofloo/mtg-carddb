@@ -255,3 +255,143 @@ def test_create_only_activation_rejects_racing_target(
         "installed.sqlite",
         "source.sqlite",
     ]
+
+
+def test_guarded_replacement_allows_unchanged_database(
+    tmp_path, monkeypatch
+):
+    old = tmp_path / "old.sqlite"
+    candidate = tmp_path / "new.sqlite"
+
+    old.write_bytes(b"original")
+    candidate.write_bytes(b"candidate")
+
+    state = activation.capture_target_state(old)
+
+    monkeypatch.setattr(
+        activation,
+        "_validate_snapshot",
+        lambda _: None,
+    )
+
+    result = activate_snapshot(
+        candidate,
+        old,
+        expected_target_state=state,
+    )
+
+    assert result == old
+    assert old.read_bytes() == b"candidate"
+
+
+def test_guard_detects_in_place_write_during_validation(
+    tmp_path, monkeypatch
+):
+    old = tmp_path / "old.sqlite"
+    candidate = tmp_path / "new.sqlite"
+
+    old.write_bytes(b"original")
+    candidate.write_bytes(b"candidate")
+
+    state = activation.capture_target_state(old)
+    original_stat = old.stat()
+
+    def mutate(_):
+        old.write_bytes(b"modified")  # Same length
+
+        import os
+        os.utime(
+            old,
+            ns=(
+                original_stat.st_atime_ns,
+                original_stat.st_mtime_ns,
+            ),
+        )
+
+    monkeypatch.setattr(
+        activation,
+        "_validate_snapshot",
+        mutate,
+    )
+
+    with pytest.raises(
+        SnapshotActivationError,
+        match="changed during update",
+    ):
+        activate_snapshot(
+            candidate,
+            old,
+            expected_target_state=state,
+        )
+
+    assert old.read_bytes() == b"modified"
+    assert candidate.read_bytes() == b"candidate"
+    assert not (tmp_path / "old.sqlite.lock").exists()
+
+
+def test_guard_detects_replaced_file_during_validation(
+    tmp_path, monkeypatch
+):
+    import os
+
+    old = tmp_path / "old.sqlite"
+    candidate = tmp_path / "new.sqlite"
+    replacement = tmp_path / "external.sqlite"
+
+    old.write_bytes(b"original")
+    candidate.write_bytes(b"candidate")
+    replacement.write_bytes(b"original")
+
+    state = activation.capture_target_state(old)
+
+    def mutate(_):
+        os.replace(replacement, old)
+
+    monkeypatch.setattr(
+        activation,
+        "_validate_snapshot",
+        mutate,
+    )
+
+    with pytest.raises(
+        SnapshotActivationError,
+        match="changed during update",
+    ):
+        activate_snapshot(
+            candidate,
+            old,
+            expected_target_state=state,
+        )
+
+    assert old.read_bytes() == b"original"
+    assert candidate.read_bytes() == b"candidate"
+
+
+def test_activation_refuses_sidecar_created_during_validation(
+    tmp_path, monkeypatch
+):
+    old = tmp_path / "old.sqlite"
+    candidate = tmp_path / "new.sqlite"
+
+    old.write_bytes(b"original")
+    candidate.write_bytes(b"candidate")
+
+    def mutate(_):
+        (tmp_path / "old.sqlite-wal").write_bytes(
+            b"pending"
+        )
+
+    monkeypatch.setattr(
+        activation,
+        "_validate_snapshot",
+        mutate,
+    )
+
+    with pytest.raises(
+        SnapshotActivationError,
+        match="SQLite sidecar",
+    ):
+        activate_snapshot(candidate, old)
+
+    assert old.read_bytes() == b"original"
+    assert candidate.read_bytes() == b"candidate"
