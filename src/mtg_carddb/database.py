@@ -79,6 +79,15 @@ def _default_database_path() -> Path:
     return base / "mtg-carddb" / "carddb.sqlite"
 
 
+def default_database_path() -> Path:
+    """Return the per-user database path without creating any files.
+
+    CardDatabase.open(None) and the CLI use the same resolver.
+    Environment variables are read when the function is called.
+    """
+    return _default_database_path()
+
+
 # Only constant, internal identifiers are used in these SQL statements.
 _CATALOG_SQL = {
     "types": "SELECT DISTINCT value FROM face_types WHERE category = 'type'",

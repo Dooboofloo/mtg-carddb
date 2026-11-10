@@ -12,6 +12,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1.2"]
+
 [project.scripts]
 mtg-carddb = "mtg_carddb.cli:main"
 
@@ -21,3 +24,7 @@ Issues = "https://github.com/Dooboofloo/mtg-carddb/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mtg_carddb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
