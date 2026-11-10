@@ -7,6 +7,7 @@ database or activates a snapshot.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +27,11 @@ from .import_policy import (
 from .ingestion import ingest_printings
 from .oracle_tags import ingest_oracle_tags, iter_oracle_tags
 from .schema import staging_database
-
+from .provenance import (
+    BulkSource,
+    verify_bulk_sources,
+    write_bulk_sources,
+)
 
 class SnapshotBuildError(RuntimeError):
     """A generated snapshot failed validation."""
@@ -44,6 +49,7 @@ class SnapshotBuildResult:
     taggings: int
     art_only_oracle_ids: int
     excluded_art_taggings: int
+    provenance_sources: int = 0
 
 
 def _validate_counts(
@@ -54,6 +60,7 @@ def _validate_counts(
     historical_observations: int,
     tags: int,
     taggings: int,
+    provenance_sources: int = 0,
 ) -> None:
     expected = {
         "sets": sets,
@@ -61,6 +68,7 @@ def _validate_counts(
         "card_set_rarities": historical_observations,
         "tags": tags,
         "card_tags": taggings,
+        "source_metadata": provenance_sources,
     }
 
     for table, count in expected.items():
@@ -102,6 +110,7 @@ def build_snapshot(
     output_path: str | Path,
     *,
     references: ReferenceData | None = None,
+    bulk_sources: Iterable[BulkSource] | None = None,
 ) -> SnapshotBuildResult:
     """Build a new verified database without replacing existing files.
 
@@ -156,6 +165,28 @@ def build_snapshot(
             ),
         )
 
+        provenance_count = 0
+
+        if bulk_sources is not None:
+            verified_sources = verify_bulk_sources(
+                bulk_sources,
+                {
+                    "default_cards": (
+                        cards_path,
+                        card_stats.printings,
+                    ),
+                    "oracle_tags": (
+                        tags_path,
+                        tag_stats.tags,
+                    ),
+                },
+            )
+
+            provenance_count = write_bulk_sources(
+                connection,
+                verified_sources,
+            )
+
         # Minimal builder metadata. Detailed Scryfall source
         # provenance will be handled by a later milestone.
         connection.execute(
@@ -177,6 +208,7 @@ def build_snapshot(
             ),
             tags=tag_stats.tags,
             taggings=tag_stats.taggings,
+            provenance_sources=provenance_count,
         )
 
         _validate_integrity(connection)
@@ -216,4 +248,5 @@ def build_snapshot(
         excluded_art_taggings=sum(
             excluded_by_tag.values()
         ),
+        provenance_sources=provenance_count,
     )

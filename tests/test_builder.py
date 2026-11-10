@@ -13,6 +13,7 @@ from mtg_carddb.builder import (
     _validate_integrity,
     build_snapshot,
 )
+from mtg_carddb.provenance import BulkSource, sha256_file
 
 
 def test_builder_never_overwrites_existing_output(tmp_path):
@@ -98,6 +99,23 @@ def test_builder_filters_only_art_ids_and_keeps_snapshot(
 
     cards.touch()
     tags.touch()
+
+    manifest = (
+        BulkSource(
+            source_type="default_cards",
+            source_url="https://example.com/cards.gz",
+            downloaded_at="2026-11-06T10:00:00Z",
+            sha256=sha256_file(cards),
+            record_count=2,
+        ),
+        BulkSource(
+            source_type="oracle_tags",
+            source_url="https://example.com/tags.gz",
+            downloaded_at="2026-11-06T10:01:00Z",
+            sha256=sha256_file(tags),
+            record_count=1,
+        ),
+    )
 
     printings = [
         {"layout": "art_series", "oracle_id": "art-only"},
@@ -187,6 +205,7 @@ def test_builder_filters_only_art_ids_and_keeps_snapshot(
             sets=(),
             vocabulary=object(),
         ),
+        bulk_sources=manifest,
     )
 
     assert result.path == target
@@ -200,6 +219,19 @@ def test_builder_filters_only_art_ids_and_keeps_snapshot(
             "SELECT builder_version "
             "FROM database_metadata WHERE id=1"
         ).fetchone() == ("snapshot-builder-v1",)
+
+    assert result.provenance_sources == 2
+
+    with sqlite3.connect(target) as db:
+        recorded = db.execute(
+            "SELECT source_type, record_count "
+            "FROM source_metadata ORDER BY source_type"
+        ).fetchall()
+
+    assert recorded == [
+        ("default_cards", 2),
+        ("oracle_tags", 1),
+    ]
 
 
 def test_row_count_validation_rejects_mismatch():
