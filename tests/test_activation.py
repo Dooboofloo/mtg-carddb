@@ -482,3 +482,41 @@ def test_activation_lock_collision_reports_owner_without_touching_target(
 
     finally:
         owner.release()
+
+
+def test_fingerprint_ignores_windows_stat_ctime_difference(
+    tmp_path, monkeypatch
+):
+    """Path.stat and fstat may report different ctimes on Windows."""
+    target = tmp_path / "installed.sqlite"
+    target.write_bytes(b"original")
+
+    expected = activation.capture_target_state(target)
+    real_stat = type(target).stat
+
+    class DifferentCtime:
+        def __init__(self, original):
+            self.original = original
+            self.st_ctime_ns = (
+                original.st_ctime_ns - 1_000_000_000
+            )
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+    def stat_with_different_ctime(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+
+        return (
+            DifferentCtime(result)
+            if self == target
+            else result
+        )
+
+    monkeypatch.setattr(
+        type(target),
+        "stat",
+        stat_with_different_ctime,
+    )
+
+    assert activation.capture_target_state(target) == expected

@@ -52,6 +52,23 @@ def _file_identity(
     )
 
 
+def _same_file_via_path(
+    opened: os.stat_result,
+    by_path: os.stat_result,
+) -> bool:
+    """Compare descriptor and path metadata across platforms.
+
+    On Windows, fstat() and stat() may report different meanings
+    for st_ctime_ns. Exclude ctime from this cross-API comparison.
+    """
+    return (
+        opened.st_dev == by_path.st_dev
+        and opened.st_ino == by_path.st_ino
+        and opened.st_size == by_path.st_size
+        and opened.st_mtime_ns == by_path.st_mtime_ns
+    )
+
+
 def capture_target_state(
     path: str | Path,
 ) -> TargetState:
@@ -91,7 +108,7 @@ def capture_target_state(
     if (
         target.is_symlink()
         or _file_identity(before) != _file_identity(after)
-        or _file_identity(after) != _file_identity(current)
+        or not _same_file_via_path(after, current)
     ):
         raise SnapshotActivationError(
             f"database target changed during fingerprint: {target}"
