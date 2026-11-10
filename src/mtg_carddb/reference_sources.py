@@ -17,6 +17,7 @@ from time import sleep
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from .network import open_verified_https
 
 class ReferenceArchiveError(ValueError):
     """A Scryfall reference source or saved archive is invalid."""
@@ -180,7 +181,12 @@ def _download_json(
         },
     )
 
-    with urlopen(request, timeout=60) as response:
+    with open_verified_https(
+        request,
+        opener=urlopen,
+        timeout=60,
+        error_type=ReferenceArchiveError,
+    ) as response:
         raw = response.read(_MAX_DOCUMENT_BYTES + 1)
 
     if len(raw) > _MAX_DOCUMENT_BYTES:

@@ -61,17 +61,31 @@ def wire_responses(*, paginated=False):
 def stub_http(monkeypatch, responses):
     seen = []
 
+    class Response(BytesIO):
+        def __init__(self, body, url):
+            super().__init__(body)
+            self._url = url
+
+        def geturl(self):
+            return self._url
+
     def fake_open(request, *, timeout):
         seen.append(request.full_url)
-        return BytesIO(
-            responses[request.full_url]
+
+        return Response(
+            responses[request.full_url],
+            request.full_url,
         )
 
     monkeypatch.setattr(
-        rs, "urlopen", fake_open
+        rs,
+        "urlopen",
+        fake_open,
     )
     monkeypatch.setattr(
-        rs, "sleep", lambda _: None
+        rs,
+        "sleep",
+        lambda _: None,
     )
 
     return seen
@@ -345,5 +359,32 @@ def test_captured_catalog_invalid_payload_is_rejected(
         rs.capture_reference_sources(
             destination
         )
+
+    assert not destination.exists()
+
+def test_reference_insecure_redirect_rejected_and_cleaned(
+    tmp_path, monkeypatch
+):
+    responses = wire_responses()
+
+    class Response(BytesIO):
+        def geturl(self):
+            return "http://unsafe.example/sets"
+
+    monkeypatch.setattr(
+        rs,
+        "urlopen",
+        lambda request, *, timeout: Response(
+            responses[request.full_url]
+        ),
+    )
+
+    destination = tmp_path / "unsafe-redirect"
+
+    with pytest.raises(
+        rs.ReferenceArchiveError,
+        match="unsafe final response URL",
+    ):
+        rs.capture_reference_sources(destination)
 
     assert not destination.exists()

@@ -83,12 +83,26 @@ def _fixture_responses(
 def _mock_http(monkeypatch, responses):
     calls = []
 
+    class Response(BytesIO):
+        def __init__(self, body, url):
+            super().__init__(body)
+            self._url = url
+
+        def geturl(self):
+            return self._url
+
     def open_url(request, *, timeout):
         calls.append(request.full_url)
-        return BytesIO(responses[request.full_url])
+
+        return Response(
+            responses[request.full_url],
+            request.full_url,
+        )
 
     monkeypatch.setattr(
-        acquisition, "urlopen", open_url
+        acquisition,
+        "urlopen",
+        open_url,
     )
 
     return calls
@@ -301,3 +315,137 @@ def test_rejects_empty_export(
         match="empty bulk export",
     ):
         acquire_bulk_sources(tmp_path / "empty")
+
+
+def test_rejects_excessive_advertised_size_before_download(
+    tmp_path, monkeypatch
+):
+    responses, _ = _fixture_responses()
+
+    metadata_url = (
+        "https://api.scryfall.com/bulk-data/default_cards"
+    )
+
+    payload = json.loads(responses[metadata_url])
+    payload["compressed_size"] = 10000
+    responses[metadata_url] = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        acquisition,
+        "_MAX_BULK_BYTES",
+        100,
+    )
+
+    calls = _mock_http(monkeypatch, responses)
+    destination = tmp_path / "oversized-advertised"
+
+    with pytest.raises(
+        BulkAcquisitionError,
+        match="download limit",
+    ):
+        acquire_bulk_sources(destination)
+
+    assert not destination.exists()
+    assert URLS["default_cards"] not in calls
+
+
+def test_stream_limit_enforced_without_advertised_size(
+    tmp_path, monkeypatch
+):
+    responses, _ = _fixture_responses()
+
+    metadata_url = (
+        "https://api.scryfall.com/bulk-data/default_cards"
+    )
+
+    payload = json.loads(responses[metadata_url])
+    del payload["compressed_size"]
+
+    responses[metadata_url] = json.dumps(payload).encode()
+
+    monkeypatch.setattr(
+        acquisition,
+        "_MAX_BULK_BYTES",
+        10,
+    )
+
+    _mock_http(monkeypatch, responses)
+    destination = tmp_path / "oversized-stream"
+
+    with pytest.raises(
+        BulkAcquisitionError,
+        match="download exceeds",
+    ):
+        acquire_bulk_sources(destination)
+
+    assert not destination.exists()
+
+
+def test_download_records_secure_effective_url(
+    tmp_path, monkeypatch
+):
+    responses, _ = _fixture_responses()
+
+    effective = (
+        "https://data.scryfall.io/redirected.jsonl.gz"
+    )
+
+    class Response(BytesIO):
+        def __init__(self, body, url):
+            super().__init__(body)
+            self._url = url
+
+        def geturl(self):
+            return self._url
+
+    def opener(request, *, timeout):
+        final = (
+            effective
+            if request.full_url == URLS["default_cards"]
+            else request.full_url
+        )
+
+        return Response(
+            responses[request.full_url],
+            final,
+        )
+
+    monkeypatch.setattr(
+        acquisition,
+        "urlopen",
+        opener,
+    )
+
+    acquired = acquire_bulk_sources(
+        tmp_path / "redirect"
+    )
+
+    assert acquired.bulk_sources[0].source_url == effective
+
+
+def test_metadata_insecure_redirect_rejected_and_cleaned(
+    tmp_path, monkeypatch
+):
+    responses, _ = _fixture_responses()
+
+    class Response(BytesIO):
+        def geturl(self):
+            return "http://unsafe.example/metadata"
+
+    monkeypatch.setattr(
+        acquisition,
+        "urlopen",
+        lambda request, *, timeout: Response(
+            responses[request.full_url]
+        ),
+    )
+
+    destination = tmp_path / "unsafe-redirect"
+
+    with pytest.raises(
+        BulkAcquisitionError,
+        match="unsafe final response URL",
+    ):
+        acquire_bulk_sources(destination)
+
+    assert not destination.exists()

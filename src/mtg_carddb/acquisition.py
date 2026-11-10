@@ -16,6 +16,7 @@ import shutil
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+from .network import open_verified_https
 from .provenance import BulkSource
 
 
@@ -44,6 +45,7 @@ _DEFAULT_USER_AGENT = (
 _TIMEOUT_SECONDS = 60
 _CHUNK_BYTES = 1024 * 1024
 _MAX_METADATA_BYTES = 1024 * 1024
+_MAX_BULK_BYTES = 1024 * 1024 * 1024  # 1 GiB hard ceiling
 
 
 def _https_url(value: object) -> str:
@@ -75,8 +77,11 @@ def _metadata(kind: str, user_agent: str) -> dict:
         },
     )
 
-    with urlopen(
-        request, timeout=_TIMEOUT_SECONDS
+    with open_verified_https(
+        request,
+        opener=urlopen,
+        timeout=_TIMEOUT_SECONDS,
+        error_type=BulkAcquisitionError,
     ) as response:
         content = response.read(_MAX_METADATA_BYTES + 1)
 
@@ -186,42 +191,68 @@ def _download(
         },
     )
 
-    digest = hashlib.sha256()
-    size = 0
-
-    with urlopen(
-        request, timeout=_TIMEOUT_SECONDS
-    ) as response:
-        with path.open("xb") as output:
-            while chunk := response.read(_CHUNK_BYTES):
-                output.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-
     expected_size = metadata.get("compressed_size")
 
     if expected_size is not None:
-        if (
-            type(expected_size) is not int
-            or expected_size < 0
-        ):
+        if type(expected_size) is not int or expected_size < 0:
             raise BulkAcquisitionError(
                 f"{kind}: invalid compressed_size metadata"
             )
 
-        if size != expected_size:
+        if expected_size > _MAX_BULK_BYTES:
             raise BulkAcquisitionError(
-                f"{kind}: compressed size mismatch: "
-                f"expected {expected_size}, received {size}"
+                f"{kind}: advertised compressed size exceeds "
+                "the 1 GiB download limit"
             )
 
+    digest = hashlib.sha256()
+    size = 0
+
+    with open_verified_https(
+        request,
+        opener=urlopen,
+        timeout=_TIMEOUT_SECONDS,
+        error_type=BulkAcquisitionError,
+    ) as response:
+        final_url = response.geturl()
+
+        with path.open("xb") as output:
+            while chunk := response.read(_CHUNK_BYTES):
+                size += len(chunk)
+
+                if size > _MAX_BULK_BYTES:
+                    raise BulkAcquisitionError(
+                        f"{kind}: download exceeds the 1 GiB limit"
+                    )
+
+                if (
+                    expected_size is not None
+                    and size > expected_size
+                ):
+                    raise BulkAcquisitionError(
+                        f"{kind}: compressed size mismatch: "
+                        f"expected {expected_size}, "
+                        f"received over {expected_size}"
+                    )
+
+                output.write(chunk)
+                digest.update(chunk)
+
+    if expected_size is not None and size != expected_size:
+        raise BulkAcquisitionError(
+            f"{kind}: compressed size mismatch: "
+            f"expected {expected_size}, received {size}"
+        )
+
     count = _validate_jsonl_gzip(
-        path, kind, expected_object
+        path,
+        kind,
+        expected_object,
     )
 
     return BulkSource(
         source_type=kind,
-        source_url=url,
+        source_url=final_url,
         source_updated_at=metadata["updated_at"],
         downloaded_at=datetime.now(
             timezone.utc
