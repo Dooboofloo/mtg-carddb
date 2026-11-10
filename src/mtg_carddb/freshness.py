@@ -24,6 +24,7 @@ class DatabaseFreshness:
     status: Literal["current", "stale", "unknown"]
     source_updated_at: datetime | None
     age: timedelta | None
+    source_type: str | None = None
 
 
 def require_database_file(path: str | Path) -> Path:
@@ -98,36 +99,41 @@ def database_freshness(
 
     current = current.astimezone(timezone.utc)
 
-    # The default_cards export is our primary mechanical data
-    # source. A recent database build alone does not prove the
-    # underlying source was fresh.
-    source = next(
-        (
-            item
-            for item in info.sources
-            if item.source_type == "default_cards"
-        ),
-        None,
-    )
+    # Both bulk exports are required. A recently updated card export
+    # cannot make old or missing Oracle Tags current.
+    sources = {
+        source.source_type: source
+        for source in info.sources
+    }
 
-    updated = (
-        _timestamp(source.source_updated_at)
-        if source is not None
-        else None
-    )
+    observed: list[tuple[str, datetime]] = []
 
-    # Missing/invalid provenance or a materially future-dated
-    # source cannot establish freshness.
-    if (
-        updated is None
-        or updated > current + timedelta(minutes=5)
-    ):
-        return DatabaseFreshness(
-            "unknown", None, None
+    for source_type in ("default_cards", "oracle_tags"):
+        source = sources.get(source_type)
+
+        updated = (
+            _timestamp(source.source_updated_at)
+            if source is not None
+            else None
         )
 
+        if (
+            updated is None
+            or updated > current + timedelta(minutes=5)
+        ):
+            return DatabaseFreshness(
+                "unknown", None, None
+            )
+
+        observed.append((source_type, updated))
+
+    oldest_type, oldest_update = min(
+        observed,
+        key=lambda item: item[1],
+    )
+
     age = max(
-        current - updated,
+        current - oldest_update,
         timedelta(0),
     )
 
@@ -137,8 +143,9 @@ def database_freshness(
 
     return DatabaseFreshness(
         "stale" if age >= threshold else "current",
-        updated,
+        oldest_update,
         age,
+        oldest_type,
     )
 
 
@@ -171,17 +178,18 @@ def report_database_freshness(
 
         _LOGGER.warning(
             "CardDB database at %s is stale: Scryfall "
-            "default_cards data is %.1f days old. "
+            "%s data is %.1f days old. "
             "Run `mtg-carddb update` or "
             "update_database(path) to refresh it.",
             path,
+            result.source_type,
             result.age.total_seconds() / 86400,
         )
 
     elif result.status == "unknown":
         _LOGGER.warning(
             "CardDB database at %s has unknown source "
-            "freshness (no valid default_cards "
+            "freshness (missing or invalid default_cards/oracle_tags "
             "source_updated_at). Run `mtg-carddb update` "
             "or update_database(path) to record verified "
             "source provenance.",

@@ -204,11 +204,11 @@ def build_snapshot(
                 verified_sources,
             )
 
-            if verified_reference_archive is not None:
-                provenance_count += write_reference_sources(
-                    connection,
-                    verified_reference_archive,
-                )
+        if verified_reference_archive is not None:
+            provenance_count += write_reference_sources(
+                connection,
+                verified_reference_archive,
+            )
 
         # Minimal builder metadata. Detailed Scryfall source
         # provenance will be handled by a later milestone.

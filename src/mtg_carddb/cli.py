@@ -269,8 +269,9 @@ def _print_info(
         print(f"Freshness: {freshness.status}")
 
         if freshness.source_updated_at is not None:
+            print(f"Oldest bulk source: {freshness.source_type}")
             print(
-                "Default Cards updated: "
+                "Oldest bulk source updated: "
                 f"{freshness.source_updated_at.isoformat()}"
             )
 

@@ -35,11 +35,12 @@ class FakeDatabase:
             schema_version=1,
             builder_version="snapshot-builder-v1",
             created_at="2026-11-10T12:00:00Z",
-            sources=(
+            sources=tuple(
                 SimpleNamespace(
-                    source_type="default_cards",
+                    source_type=kind,
                     source_updated_at=timestamp,
-                ),
+                )
+                for kind in ("default_cards", "oracle_tags")
             ) if timestamp else (),
         )
         self.closed = False
@@ -447,3 +448,29 @@ def test_init_no_progress_flag(
 
     assert captured.err == ""
     assert "Cards: 42" in captured.out
+
+
+def test_info_reports_oldest_bulk_source(
+    tmp_path, monkeypatch, capsys
+):
+    database = fake_database(
+        monkeypatch,
+        age_days=1,
+    )
+
+    older = (
+        datetime.now(timezone.utc)
+        - timedelta(days=10)
+    ).isoformat()
+
+    database.metadata.sources[1].source_updated_at = older
+
+    assert cli.main([
+        "info",
+        "--no-stale-warning",
+    ]) == 0
+
+    output = capsys.readouterr().out
+
+    assert "Freshness: stale" in output
+    assert "Oldest bulk source: oracle_tags" in output

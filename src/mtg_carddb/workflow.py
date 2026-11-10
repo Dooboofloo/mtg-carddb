@@ -9,6 +9,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import os
+import logging
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator, Literal
@@ -18,11 +20,14 @@ from .acquisition import acquire_bulk_sources
 from .activation import activate_snapshot
 from .builder import SnapshotBuildResult, build_snapshot
 from .reference_sources import capture_reference_sources
+from .database import CardDatabase
+from .storage import DatabaseOpenError
 
 
 class DatabaseWorkflowError(RuntimeError):
     """A database workflow could not safely proceed."""
 
+_LOGGER = logging.getLogger("mtg_carddb")
 
 @dataclass(frozen=True, slots=True)
 class DatabaseWorkflowResult:
@@ -51,6 +56,27 @@ class WorkflowProgress:
 ProgressCallback = Callable[[WorkflowProgress], None]
 
 
+def _validate_update_target(target: Path) -> None:
+    """Reject non-CardDB files before an update can replace them."""
+    try:
+        with CardDatabase.open(
+            target,
+            warn_if_stale=False,
+        ) as database:
+            database.info()
+
+    except (
+        DatabaseOpenError,
+        sqlite3.DatabaseError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        raise DatabaseWorkflowError(
+            "cannot update: target is not a readable, compatible "
+            f"CardDB database: {target}"
+        ) from exc
+
+
 def _check_target(target: Path, *, update: bool) -> None:
     if target.is_symlink():
         raise DatabaseWorkflowError(
@@ -63,6 +89,9 @@ def _check_target(target: Path, *, update: bool) -> None:
                 "cannot update: database is not an "
                 f"existing regular file: {target}"
             )
+
+        _validate_update_target(target)
+
     elif target.exists():
         raise FileExistsError(
             f"database already exists: {target}"
@@ -112,14 +141,32 @@ def _run(
 
     _check_target(target, update=update)
 
+    callback = on_progress
+
     def report(
         stage: WorkflowStage,
         status: WorkflowStatus,
         detail: str = "",
     ) -> None:
-        if on_progress is not None:
-            on_progress(
+        nonlocal callback
+
+        if callback is None:
+            return
+
+        try:
+            callback(
                 WorkflowProgress(stage, status, detail)
+            )
+
+        except Exception:
+            # Progress is observational. Never report an unsuccessful
+            # update merely because its notification handler failed.
+            callback = None
+
+            _LOGGER.warning(
+                "CardDB progress callback failed; further "
+                "notifications are disabled",
+                exc_info=True,
             )
 
     with _workflow_lock(target):

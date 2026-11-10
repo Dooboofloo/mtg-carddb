@@ -80,10 +80,14 @@ def fake_pipeline(monkeypatch):
         workflow, "build_snapshot", build
     )
 
-    # Fixture snapshots contain test bytes, not actual SQLite.
-    # The real validator is covered by activation tests.
     monkeypatch.setattr(
         activation, "_validate_snapshot", lambda _: None
+    )
+
+    # These test snapshots contain synthetic bytes, not SQLite.
+    # The real update-target validator is tested separately.
+    monkeypatch.setattr(
+        workflow, "_validate_update_target", lambda _: None
     )
 
     return steps
@@ -318,3 +322,96 @@ def test_failed_build_does_not_report_activation(
     )
 
     assert target.read_bytes() == b"existing database"
+
+
+def test_update_refuses_unrelated_file_without_download(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "notes.sqlite"
+    original = b"important non-CardDB file"
+    target.write_bytes(original)
+
+    def no_download(_directory):
+        pytest.fail(
+            "must reject the target before any download"
+        )
+
+    monkeypatch.setattr(
+        workflow,
+        "acquire_bulk_sources",
+        no_download,
+    )
+
+    with pytest.raises(
+        DatabaseWorkflowError,
+        match="compatible CardDB",
+    ):
+        update_database(target)
+
+    assert target.read_bytes() == original
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_update_accepts_existing_carddb_schema(tmp_path):
+    from mtg_carddb.schema import staging_database
+
+    target = tmp_path / "valid.sqlite"
+
+    with staging_database(target) as connection:
+        connection.execute(
+            "INSERT INTO database_metadata "
+            "(id, created_at, builder_version) VALUES (1, ?, ?)",
+            (
+                "2026-11-10T12:00:00+00:00",
+                "snapshot-builder-v1",
+            ),
+        )
+
+    workflow._check_target(target, update=True)
+
+
+def test_failed_completion_callback_does_not_change_result(
+    tmp_path, monkeypatch, caplog
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"old database")
+
+    def callback(event):
+        if (
+            event.stage == "activation"
+            and event.status == "complete"
+        ):
+            raise RuntimeError("display crashed")
+
+    result = update_database(
+        target,
+        on_progress=callback,
+    )
+
+    assert result.operation == "update"
+    assert target.read_bytes() == b"new database"
+    assert "progress callback failed" in caplog.text
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_failed_initial_callback_is_nonfatal_and_disabled(
+    tmp_path, monkeypatch, caplog
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    received = []
+
+    def callback(event):
+        received.append(event)
+        raise RuntimeError("display crashed")
+
+    result = initialize_database(
+        target,
+        on_progress=callback,
+    )
+
+    assert result.operation == "init"
+    assert target.read_bytes() == b"new database"
+    assert len(received) == 1
+    assert "progress callback failed" in caplog.text

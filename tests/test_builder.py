@@ -279,3 +279,93 @@ def test_integrity_validation_rejects_foreign_key_violation():
             SnapshotBuildError, match="foreign-key"
         ):
             _validate_integrity(db)
+
+
+def test_reference_archive_provenance_without_bulk_manifest(
+    tmp_path, monkeypatch,
+):
+    from mtg_carddb.reference_sources import (
+        ReferenceArchive,
+        ReferenceSource,
+    )
+
+    cards = tmp_path / "cards.gz"
+    tags = tmp_path / "tags.gz"
+    target = tmp_path / "archived.sqlite"
+
+    cards.touch()
+    tags.touch()
+
+    reference = ReferenceSource(
+        source_type="sets:page:1",
+        source_url="https://api.scryfall.com/sets",
+        filename="sets-0001.json",
+        downloaded_at="2026-11-10T12:00:00Z",
+        sha256="a" * 64,
+        record_count=2,
+    )
+
+    archive = ReferenceArchive(
+        tmp_path,
+        (reference,),
+    )
+
+    references = SimpleNamespace(
+        sets=(),
+        vocabulary=object(),
+    )
+
+    monkeypatch.setattr(
+        builder,
+        "replay_reference_archive",
+        lambda _: (references, archive),
+    )
+
+    monkeypatch.setattr(
+        builder,
+        "iter_default_cards",
+        lambda _: iter(()),
+    )
+
+    monkeypatch.setattr(
+        builder,
+        "write_sets",
+        lambda *_: 0,
+    )
+
+    monkeypatch.setattr(
+        builder,
+        "ingest_printings",
+        lambda *_: SimpleNamespace(
+            printings=0,
+            excluded_printings=0,
+            oracle_cards=0,
+            historical_observations=0,
+        ),
+    )
+
+    monkeypatch.setattr(
+        builder,
+        "ingest_oracle_tags",
+        lambda *_: SimpleNamespace(
+            tags=0,
+            taggings=0,
+        ),
+    )
+
+    result = build_snapshot(
+        cards,
+        tags,
+        target,
+        reference_archive=archive,
+    )
+
+    assert result.provenance_sources == 1
+
+    with sqlite3.connect(target) as connection:
+        assert connection.execute(
+            "SELECT source_type, record_count "
+            "FROM source_metadata"
+        ).fetchall() == [
+            ("sets:page:1", 2)
+        ]

@@ -20,18 +20,38 @@ NOW = datetime(
 )
 
 
-def info(updated=None, *, source=True):
+def info(
+    updated=None,
+    *,
+    source=True,
+    tags_updated=...,
+    include_tags=True,
+):
+    sources = []
+
+    if source:
+        sources.append(
+            SimpleNamespace(
+                source_type="default_cards",
+                source_updated_at=updated,
+            )
+        )
+
+        if include_tags:
+            sources.append(
+                SimpleNamespace(
+                    source_type="oracle_tags",
+                    source_updated_at=(
+                        updated
+                        if tags_updated is ...
+                        else tags_updated
+                    ),
+                )
+            )
+
     return SimpleNamespace(
         created_at=NOW.isoformat(),
-        sources=(
-            (
-                SimpleNamespace(
-                    source_type="default_cards",
-                    source_updated_at=updated,
-                ),
-            )
-            if source else ()
-        ),
+        sources=tuple(sources),
     )
 
 
@@ -200,3 +220,43 @@ def test_invalid_threshold_rejected(invalid):
             now=NOW,
             stale_after_days=invalid,
         )
+
+
+def test_stale_oracle_tags_makes_whole_database_stale():
+    result = database_freshness(
+        info(
+            (NOW - timedelta(days=1)).isoformat(),
+            tags_updated=(
+                NOW - timedelta(days=20)
+            ).isoformat(),
+        ),
+        now=NOW,
+    )
+
+    assert result.status == "stale"
+    assert result.source_type == "oracle_tags"
+    assert result.age == timedelta(days=20)
+
+
+def test_missing_oracle_tags_is_unknown():
+    result = database_freshness(
+        info(
+            (NOW - timedelta(days=1)).isoformat(),
+            include_tags=False,
+        ),
+        now=NOW,
+    )
+
+    assert result.status == "unknown"
+
+
+def test_invalid_oracle_tags_timestamp_is_unknown():
+    result = database_freshness(
+        info(
+            (NOW - timedelta(days=1)).isoformat(),
+            tags_updated=None,
+        ),
+        now=NOW,
+    )
+
+    assert result.status == "unknown"
