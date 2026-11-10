@@ -252,3 +252,69 @@ def test_init_does_not_replace_racing_target(
         b"another process created this"
     )
     assert_workspace_clean(tmp_path, target)
+
+
+def test_init_emits_ordered_progress_events(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    events = []
+
+    initialize_database(
+        target,
+        on_progress=events.append,
+    )
+
+    assert [
+        (event.stage, event.status)
+        for event in events
+    ] == [
+        ("bulk", "start"),
+        ("bulk", "complete"),
+        ("references", "start"),
+        ("references", "complete"),
+        ("build", "start"),
+        ("build", "complete"),
+        ("activation", "start"),
+        ("activation", "complete"),
+    ]
+
+    assert "Oracle cards" in events[5].detail
+
+
+def test_failed_build_does_not_report_activation(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"existing database")
+
+    def fail_build(**_kwargs):
+        raise ValueError("import failed")
+
+    monkeypatch.setattr(
+        workflow,
+        "build_snapshot",
+        fail_build,
+    )
+
+    events = []
+
+    with pytest.raises(
+        ValueError,
+        match="import failed",
+    ):
+        update_database(
+            target,
+            on_progress=events.append,
+        )
+
+    assert events[-1].stage == "build"
+    assert events[-1].status == "start"
+    assert all(
+        event.stage != "activation"
+        for event in events
+    )
+
+    assert target.read_bytes() == b"existing database"

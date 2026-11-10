@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Iterator, Literal
+from collections.abc import Callable
 
 from .acquisition import acquire_bulk_sources
 from .activation import activate_snapshot
@@ -28,6 +29,26 @@ class DatabaseWorkflowResult:
     operation: Literal["init", "update"]
     path: Path
     build: SnapshotBuildResult
+
+
+WorkflowStage = Literal[
+    "bulk",
+    "references",
+    "build",
+    "activation",
+]
+
+WorkflowStatus = Literal["start", "complete"]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowProgress:
+    stage: WorkflowStage
+    status: WorkflowStatus
+    detail: str = ""
+
+
+ProgressCallback = Callable[[WorkflowProgress], None]
 
 
 def _check_target(target: Path, *, update: bool) -> None:
@@ -79,6 +100,7 @@ def _run(
     target_path: str | Path,
     *,
     update: bool,
+    on_progress: ProgressCallback | None = None,
 ) -> DatabaseWorkflowResult:
     target = Path(target_path).absolute()
 
@@ -90,24 +112,42 @@ def _run(
 
     _check_target(target, update=update)
 
+    def report(
+        stage: WorkflowStage,
+        status: WorkflowStatus,
+        detail: str = "",
+    ) -> None:
+        if on_progress is not None:
+            on_progress(
+                WorkflowProgress(stage, status, detail)
+            )
+
     with _workflow_lock(target):
         _check_target(target, update=update)
 
-        # All intermediate files stay isolated from the installed
-        # database and are removed after success or failure.
         with TemporaryDirectory(
             prefix=f".{target.stem}-build-",
             dir=target.parent,
         ) as temporary:
             workspace = Path(temporary)
 
+            report("bulk", "start")
+
             bulk = acquire_bulk_sources(
                 workspace / "bulk"
             )
 
+            report("bulk", "complete")
+
+            report("references", "start")
+
             references = capture_reference_sources(
                 workspace / "references"
             )
+
+            report("references", "complete")
+
+            report("build", "start")
 
             built = build_snapshot(
                 cards_path=bulk.cards_path,
@@ -117,8 +157,16 @@ def _run(
                 reference_archive=references,
             )
 
-            # The destination may have changed during acquisition.
+            report(
+                "build",
+                "complete",
+                f"{built.cards:,} Oracle cards, "
+                f"{built.printings:,} source printings",
+            )
+
             _check_target(target, update=update)
+
+            report("activation", "start")
 
             activate_snapshot(
                 built.path,
@@ -126,8 +174,8 @@ def _run(
                 replace_existing=update,
             )
 
-            # The builder's temporary path will be deleted, so
-            # report the installed database path instead.
+            report("activation", "complete")
+
             return DatabaseWorkflowResult(
                 operation="update" if update else "init",
                 path=target,
@@ -137,13 +185,25 @@ def _run(
 
 def initialize_database(
     target_path: str | Path,
+    *,
+    on_progress: ProgressCallback | None = None,
 ) -> DatabaseWorkflowResult:
-    """Install a newly built database without overwriting one."""
-    return _run(target_path, update=False)
+    """Install a new database without overwriting one."""
+    return _run(
+        target_path,
+        update=False,
+        on_progress=on_progress,
+    )
 
 
 def update_database(
     target_path: str | Path,
+    *,
+    on_progress: ProgressCallback | None = None,
 ) -> DatabaseWorkflowResult:
-    """Replace an existing database after a verified new build."""
-    return _run(target_path, update=True)
+    """Replace a database after building a verified snapshot."""
+    return _run(
+        target_path,
+        update=True,
+        on_progress=on_progress,
+    )

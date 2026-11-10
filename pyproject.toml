@@ -12,6 +12,9 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []
 
+[project.scripts]
+mtg-carddb = "mtg_carddb.cli:main"
+
 [project.urls]
 Repository = "https://github.com/Dooboofloo/mtg-carddb"
 Issues = "https://github.com/Dooboofloo/mtg-carddb/issues"
