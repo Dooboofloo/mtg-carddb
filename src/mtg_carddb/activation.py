@@ -15,12 +15,17 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import logging
 
 from .database import CardDatabase
+from .lockfiles import acquire_lock
 
 
 class SnapshotActivationError(RuntimeError):
     """A snapshot could not be verified or safely activated."""
+
+
+_LOGGER = logging.getLogger("mtg_carddb")
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,18 +249,12 @@ def activate_snapshot(
 
     lock = target.with_name(target.name + ".lock")
 
-    try:
-        descriptor = os.open(
-            lock,
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            0o600,
-        )
-    except FileExistsError as exc:
-        raise SnapshotActivationError(
-            f"activation lock already exists: {lock}"
-        ) from exc
-    else:
-        os.close(descriptor)
+    owner = acquire_lock(
+        lock,
+        purpose="activation",
+        error_type=SnapshotActivationError,
+        collision_message="activation lock already exists",
+    )
 
     staged: Path | None = None
 
@@ -332,7 +331,16 @@ def activate_snapshot(
         return target
 
     finally:
-        if staged is not None:
-            staged.unlink(missing_ok=True)
+        try:
+            if staged is not None:
+                staged.unlink(missing_ok=True)
 
-        lock.unlink(missing_ok=True)
+        except OSError:
+            _LOGGER.warning(
+                "Could not clean up staged CardDB file %s",
+                staged,
+                exc_info=True,
+            )
+
+        finally:
+            owner.release()

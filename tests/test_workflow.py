@@ -473,3 +473,101 @@ def test_init_has_no_target_fingerprint(
     initialize_database(target)
 
     assert fingerprints == [None]
+
+
+def test_cleanup_error_after_success_is_warning_not_failure(
+    tmp_path, monkeypatch, caplog
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+
+    original_cleanup = workflow.TemporaryDirectory.cleanup
+
+    def failing_cleanup(self):
+        original_cleanup(self)
+        raise PermissionError("simulated cleanup failure")
+
+    monkeypatch.setattr(
+        workflow.TemporaryDirectory,
+        "cleanup",
+        failing_cleanup,
+    )
+
+    result = initialize_database(target)
+
+    assert result.operation == "init"
+    assert target.read_bytes() == b"new database"
+    assert (
+        "Could not clean up CardDB build workspace"
+        in caplog.text
+    )
+
+
+def test_cleanup_error_does_not_mask_original_failure(
+    tmp_path, monkeypatch, caplog
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+
+    original_cleanup = workflow.TemporaryDirectory.cleanup
+
+    def failing_cleanup(self):
+        original_cleanup(self)
+        raise PermissionError("simulated cleanup failure")
+
+    def failing_build(**_):
+        raise ValueError("primary build failure")
+
+    monkeypatch.setattr(
+        workflow.TemporaryDirectory,
+        "cleanup",
+        failing_cleanup,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_snapshot",
+        failing_build,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="primary build failure",
+    ):
+        initialize_database(target)
+
+    assert not target.exists()
+    assert (
+        "Could not clean up CardDB build workspace"
+        in caplog.text
+    )
+
+
+def test_workflow_lock_collision_reports_owner_without_removing_lock(
+    tmp_path,
+):
+    from mtg_carddb.lockfiles import acquire_lock
+
+    target = tmp_path / "carddb.sqlite"
+    lock = tmp_path / "carddb.sqlite.workflow.lock"
+
+    owner = acquire_lock(
+        lock,
+        purpose="workflow",
+        error_type=RuntimeError,
+        collision_message="locked",
+    )
+
+    try:
+        with pytest.raises(
+            DatabaseWorkflowError,
+            match="PID=.*mtg-carddb locks",
+        ):
+            with workflow._workflow_lock(target):
+                pytest.fail(
+                    "must not enter locked workflow"
+                )
+
+        assert lock.exists()
+
+    finally:
+        owner.release()

@@ -474,3 +474,71 @@ def test_info_reports_oldest_bulk_source(
 
     assert "Freshness: stale" in output
     assert "Oldest bulk source: oracle_tags" in output
+
+
+def test_locks_cli_reports_owner_and_orphan_workspaces(
+    tmp_path, capsys
+):
+    from mtg_carddb.lockfiles import acquire_lock
+
+    target = tmp_path / "carddb.sqlite"
+
+    workspace = tmp_path / ".carddb-build-abandoned"
+    workspace.mkdir()
+
+    staged = tmp_path / ".carddb.sqlite.abandoned.sqlite"
+    staged.write_bytes(b"partial snapshot")
+
+    lock = tmp_path / "carddb.sqlite.workflow.lock"
+
+    owner = acquire_lock(
+        lock,
+        purpose="workflow",
+        error_type=RuntimeError,
+        collision_message="locked",
+    )
+
+    try:
+        assert cli.main([
+            "locks",
+            "-d",
+            str(target),
+        ]) == 0
+
+        output = capsys.readouterr().out
+
+        assert "Workflow lock:" in output
+        assert "PID=" in output
+        assert "Activation lock:" in output
+        assert "absent" in output
+        assert str(workspace) in output
+        assert str(staged) in output
+        assert "manual cleanup" in output
+
+        assert lock.exists()
+        assert workspace.exists()
+        assert staged.exists()
+
+    finally:
+        owner.release()
+
+
+def test_locks_cli_describes_legacy_lock_without_removing_it(
+    tmp_path, capsys
+):
+    target = tmp_path / "carddb.sqlite"
+    lock = tmp_path / "carddb.sqlite.lock"
+
+    lock.write_text("legacy lock")
+
+    assert cli.main([
+        "locks",
+        "--database",
+        str(target),
+    ]) == 0
+
+    assert (
+        "owner unknown"
+        in capsys.readouterr().out
+    )
+    assert lock.read_text() == "legacy lock"

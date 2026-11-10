@@ -27,6 +27,7 @@ from .workflow import (
     initialize_database,
     update_database,
 )
+from .lockfiles import describe_lock
 
 
 def _positive_days(value: str) -> float:
@@ -178,6 +179,7 @@ def _parser() -> argparse.ArgumentParser:
             "Rebuild and safely replace an existing database",
         ),
         ("info", "Inspect database metadata and freshness"),
+        ("locks", "Inspect locks and interrupted-build workspaces"),
     ):
         command = commands.add_parser(
             name,
@@ -282,6 +284,62 @@ def _print_info(
             print(f"Source age (days): {age_days:.1f}")
 
 
+def _print_locks(path: Path) -> None:
+    """Read-only diagnostics. Never delete a potentially live lock."""
+    print(f"Database: {path}")
+
+    for label, suffix in (
+        ("Workflow", ".workflow.lock"),
+        ("Activation", ".lock"),
+    ):
+        lock = path.with_name(
+            path.name + suffix
+        )
+
+        print(
+            f"{label} lock: {lock} — "
+            f"{describe_lock(lock)}"
+        )
+
+    workspaces = sorted(
+        item
+        for item in path.parent.glob(
+            f".{path.stem}-build-*"
+        )
+        if item.is_dir()
+    ) if path.parent.is_dir() else []
+
+    if workspaces:
+        print(
+            "Build workspaces "
+            "(may be active or leftover):"
+        )
+
+        for workspace in workspaces:
+            print(f"  {workspace}")
+
+    staging = sorted(
+        path.parent.glob(
+            f".{path.name}.*.sqlite"
+        )
+    ) if path.parent.is_dir() else []
+
+    if staging:
+        print(
+            "Activation staging files "
+            "(may be active or leftover):"
+        )
+
+        for staged in staging:
+            print(f"  {staged}")
+
+    print(
+        "A lock, workspace, or staging file may still belong "
+        "to a live process. Confirm no CardDB operation is "
+        "running before manual cleanup."
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Return 0 on success and 1 for operational errors.
 
@@ -327,6 +385,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
 
             _print_build(result)
+
+        elif args.command == "locks":
+            _print_locks(target)
 
         elif args.command == "info":
             _print_info(

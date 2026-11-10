@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-import os
 import logging
 import sqlite3
 from pathlib import Path
@@ -22,6 +21,7 @@ from .builder import SnapshotBuildResult, build_snapshot
 from .reference_sources import capture_reference_sources
 from .database import CardDatabase
 from .storage import DatabaseOpenError
+from .lockfiles import acquire_lock
 
 
 class DatabaseWorkflowError(RuntimeError):
@@ -99,30 +99,53 @@ def _check_target(target: Path, *, update: bool) -> None:
 
 
 @contextmanager
-def _workflow_lock(target: Path) -> Iterator[None]:
+def _workflow_lock(
+    target: Path,
+) -> Iterator[None]:
     """Prevent cooperating init/update operations from overlapping."""
     lock_path = target.with_name(
         target.name + ".workflow.lock"
     )
 
-    try:
-        descriptor = os.open(
-            lock_path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
-        )
-    except FileExistsError as exc:
-        raise DatabaseWorkflowError(
-            "another database workflow may be running: "
-            f"{lock_path}"
-        ) from exc
-
-    os.close(descriptor)
+    owner = acquire_lock(
+        lock_path,
+        purpose="workflow",
+        error_type=DatabaseWorkflowError,
+        collision_message=(
+            "another database workflow may be running"
+        ),
+    )
 
     try:
         yield
     finally:
-        lock_path.unlink(missing_ok=True)
+        owner.release()
+
+
+@contextmanager
+def _workspace(
+    target: Path,
+) -> Iterator[Path]:
+    """Best-effort cleanup that never masks the build outcome."""
+    temporary = TemporaryDirectory(
+        prefix=f".{target.stem}-build-",
+        dir=target.parent,
+    )
+
+    try:
+        yield Path(temporary.name)
+
+    finally:
+        try:
+            temporary.cleanup()
+
+        except OSError:
+            _LOGGER.warning(
+                "Could not clean up CardDB build "
+                "workspace %s; inspect before removing",
+                temporary.name,
+                exc_info=True,
+            )
 
 
 def _run(
@@ -190,11 +213,7 @@ def _run(
                     f"initial validation: {target}"
                 )
 
-        with TemporaryDirectory(
-            prefix=f".{target.stem}-build-",
-            dir=target.parent,
-        ) as temporary:
-            workspace = Path(temporary)
+        with _workspace(target) as workspace:
 
             report("bulk", "start")
 

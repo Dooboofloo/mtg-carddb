@@ -395,3 +395,90 @@ def test_activation_refuses_sidecar_created_during_validation(
 
     assert old.read_bytes() == b"original"
     assert candidate.read_bytes() == b"candidate"
+
+
+def test_failed_staging_cleanup_does_not_hide_original_error(
+    tmp_path, monkeypatch, caplog
+):
+    source = tmp_path / "source.sqlite"
+    target = tmp_path / "active.sqlite"
+
+    source.write_bytes(b"candidate")
+    target.write_bytes(b"old")
+
+    def invalid(_):
+        raise SnapshotActivationError(
+            "primary validation failure"
+        )
+
+    monkeypatch.setattr(
+        activation,
+        "_validate_snapshot",
+        invalid,
+    )
+
+    original_unlink = type(target).unlink
+
+    def fail_staged_unlink(self, *args, **kwargs):
+        if self.name.startswith(".active.sqlite."):
+            raise PermissionError(
+                "cannot remove stage"
+            )
+
+        return original_unlink(
+            self, *args, **kwargs
+        )
+
+    monkeypatch.setattr(
+        type(target),
+        "unlink",
+        fail_staged_unlink,
+    )
+
+    with pytest.raises(
+        SnapshotActivationError,
+        match="primary validation failure",
+    ):
+        activate_snapshot(source, target)
+
+    assert target.read_bytes() == b"old"
+    assert (
+        "Could not clean up staged CardDB file"
+        in caplog.text
+    )
+    assert not (
+        tmp_path / "active.sqlite.lock"
+    ).exists()
+
+
+def test_activation_lock_collision_reports_owner_without_touching_target(
+    tmp_path,
+):
+    from mtg_carddb.lockfiles import acquire_lock
+
+    source = tmp_path / "source.sqlite"
+    target = tmp_path / "active.sqlite"
+    lock = tmp_path / "active.sqlite.lock"
+
+    source.write_bytes(b"new")
+    target.write_bytes(b"old")
+
+    owner = acquire_lock(
+        lock,
+        purpose="activation",
+        error_type=RuntimeError,
+        collision_message="locked",
+    )
+
+    try:
+        with pytest.raises(
+            SnapshotActivationError,
+            match="PID=.*mtg-carddb locks",
+        ):
+            activate_snapshot(source, target)
+
+        assert target.read_bytes() == b"old"
+        assert lock.exists()
+
+    finally:
+        owner.release()
