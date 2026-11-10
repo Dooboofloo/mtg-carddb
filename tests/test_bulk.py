@@ -109,3 +109,69 @@ def test_corrupted_gzip_trailer_fails(tmp_path):
 def test_missing_path_reports_read_failure(tmp_path):
     with pytest.raises(BulkReadError, match="could not read"):
         list(iter_default_cards(tmp_path / "missing.jsonl.gz"))
+
+
+def test_bulk_reader_maps_oversized_record_to_format_error(
+    tmp_path,
+    monkeypatch,
+):
+    from mtg_carddb import bulk
+    from mtg_carddb.jsonl_limits import (
+        iter_bounded_gzip_lines,
+    )
+
+    path = tmp_path / "oversized.gz"
+    write_cards(
+        path,
+        [{"object": "card", "id": "x"}],
+    )
+
+    monkeypatch.setattr(
+        bulk,
+        "iter_bounded_gzip_lines",
+        lambda src: iter_bounded_gzip_lines(
+            src,
+            max_record_bytes=8,
+        ),
+    )
+
+    with pytest.raises(
+        BulkFormatError,
+        match="line 1 exceeds 8 bytes",
+    ):
+        list(iter_default_cards(path))
+
+
+def test_bulk_reader_maps_total_limit_to_format_error(
+    tmp_path,
+    monkeypatch,
+):
+    from mtg_carddb import bulk
+    from mtg_carddb.jsonl_limits import (
+        iter_bounded_gzip_lines,
+    )
+
+    path = tmp_path / "oversized-total.gz"
+
+    write_cards(
+        path,
+        [
+            {"object": "card", "id": "a"},
+            {"object": "card", "id": "b"},
+        ],
+    )
+
+    monkeypatch.setattr(
+        bulk,
+        "iter_bounded_gzip_lines",
+        lambda src: iter_bounded_gzip_lines(
+            src,
+            max_total_bytes=32,
+        ),
+    )
+
+    with pytest.raises(
+        BulkFormatError,
+        match="export exceeds 32 bytes",
+    ):
+        list(iter_default_cards(path))

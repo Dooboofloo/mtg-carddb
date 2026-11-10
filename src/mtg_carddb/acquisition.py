@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -18,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from .network import open_verified_https
 from .provenance import BulkSource
+from .jsonl_limits import iter_bounded_gzip_lines
 
 
 class BulkAcquisitionError(RuntimeError):
@@ -127,31 +127,30 @@ def _validate_jsonl_gzip(
     kind: str,
     expected_object: str,
 ) -> int:
-    """Check gzip CRC, JSONL records, and record count."""
+    """Check bounded gzip JSONL, CRC, objects and record count."""
 
     count = 0
 
     try:
-        with gzip.open(
-            path, "rt", encoding="utf-8"
-        ) as stream:
-            for count, line in enumerate(stream, 1):
-                if not line.strip():
-                    raise BulkAcquisitionError(
-                        f"{kind}: blank JSONL record "
-                        f"at line {count}"
-                    )
+        for count, line in iter_bounded_gzip_lines(
+            path
+        ):
+            if not line.strip():
+                raise BulkAcquisitionError(
+                    f"{kind}: blank JSONL record "
+                    f"at line {count}"
+                )
 
-                entry = json.loads(line)
+            entry = json.loads(line)
 
-                if (
-                    not isinstance(entry, dict)
-                    or entry.get("object") != expected_object
-                ):
-                    raise BulkAcquisitionError(
-                        f"{kind}: unexpected object "
-                        f"at line {count}"
-                    )
+            if (
+                not isinstance(entry, dict)
+                or entry.get("object") != expected_object
+            ):
+                raise BulkAcquisitionError(
+                    f"{kind}: unexpected object "
+                    f"at line {count}"
+                )
 
     except (
         OSError,

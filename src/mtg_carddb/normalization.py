@@ -248,32 +248,72 @@ class TypeVocabulary:
                 f"empty subtype list: {type_line!r}"
             )
 
-        # Prefer the longest recognized subtype.
-        # "Time Lord" stays one subtype rather than "Time" + "Lord".
-        options = sorted(
-            (
-                (tuple(name.split()), name)
-                for name in self.subtypes
-            ),
-            key=lambda pair: (-len(pair[0]), pair[1]),
-        )
+        # Prefer the longest subtype that permits a complete parse.
+        # Greedy matching alone can fail: "A B C" may require
+        # "A" + "B C" when "A B" also exists but "C" does not.
+        options_by_first: dict[
+            str, list[tuple[tuple[str, ...], str]]
+        ] = {}
 
-        position = 0
-        found: set[str] = set()
+        for name in self.subtypes:
+            words = tuple(name.split())
 
-        while position < len(tokens):
-            for words, name in options:
+            if words:
+                options_by_first.setdefault(
+                    words[0], []
+                ).append((words, name))
+
+        for options in options_by_first.values():
+            options.sort(
+                key=lambda pair: (-len(pair[0]), pair[1])
+            )
+
+        # Work backward to identify positions from which the
+        # remainder of the subtype sequence can be parsed.
+        #
+        # This avoids recursive backtracking and exponential
+        # behavior when subtype names overlap.
+        end = len(tokens)
+
+        reachable = [False] * (end + 1)
+        choices: list[
+            tuple[str, int] | None
+        ] = [None] * end
+
+        reachable[end] = True
+
+        for position in range(end - 1, -1, -1):
+            for words, name in options_by_first.get(
+                tokens[position], ()
+            ):
+                next_position = position + len(words)
+
                 if (
-                    tuple(tokens[position:position + len(words)])
-                    == words
+                    next_position <= end
+                    and reachable[next_position]
+                    and tokens[position:next_position]
+                    == list(words)
                 ):
-                    found.add(name)
-                    position += len(words)
+                    reachable[position] = True
+                    choices[position] = (
+                        name, next_position
+                    )
                     break
-            else:
-                raise NormalizationError(
-                    f"unrecognized subtype in {type_line!r}"
-                )
+
+        if not reachable[0]:
+            raise NormalizationError(
+                f"unrecognized subtype in {type_line!r}"
+            )
+
+        found: set[str] = set()
+        position = 0
+
+        while position < end:
+            choice = choices[position]
+            assert choice is not None
+
+            name, position = choice
+            found.add(name)
 
         return supertypes, types, frozenset(found)
 

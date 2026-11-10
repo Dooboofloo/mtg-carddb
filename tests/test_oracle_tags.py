@@ -210,3 +210,69 @@ def test_reader_corrupt_gzip_trailer(tmp_path):
 def test_missing_bulk_file_error(tmp_path):
     with pytest.raises(OracleTagReadError):
         list(iter_oracle_tags(tmp_path / "missing.gz"))
+
+
+def test_tag_reader_maps_oversized_record_to_format_error(
+    tmp_path,
+    monkeypatch,
+):
+    from mtg_carddb import oracle_tags
+    from mtg_carddb.jsonl_limits import (
+        iter_bounded_gzip_lines,
+    )
+
+    path = tmp_path / "oversized-tag.gz"
+    write_tags(
+        path,
+        [tag("a", "a")],
+    )
+
+    monkeypatch.setattr(
+        oracle_tags,
+        "iter_bounded_gzip_lines",
+        lambda src: iter_bounded_gzip_lines(
+            src,
+            max_record_bytes=10,
+        ),
+    )
+
+    with pytest.raises(
+        OracleTagFormatError,
+        match="line 1 exceeds 10 bytes",
+    ):
+        list(iter_oracle_tags(path))
+
+
+def test_tag_reader_maps_total_limit_to_format_error(
+    tmp_path,
+    monkeypatch,
+):
+    from mtg_carddb import oracle_tags
+    from mtg_carddb.jsonl_limits import (
+        iter_bounded_gzip_lines,
+    )
+
+    path = tmp_path / "oversized-tags-total.gz"
+
+    write_tags(
+        path,
+        [
+            tag("a", "a"),
+            tag("b", "b"),
+        ],
+    )
+
+    monkeypatch.setattr(
+        oracle_tags,
+        "iter_bounded_gzip_lines",
+        lambda src: iter_bounded_gzip_lines(
+            src,
+            max_total_bytes=180,
+        ),
+    )
+
+    with pytest.raises(
+        OracleTagFormatError,
+        match="export exceeds 180 bytes",
+    ):
+        list(iter_oracle_tags(path))

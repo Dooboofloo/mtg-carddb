@@ -449,3 +449,75 @@ def test_metadata_insecure_redirect_rejected_and_cleaned(
         acquire_bulk_sources(destination)
 
     assert not destination.exists()
+
+
+def test_validation_rejects_oversized_jsonl_record(
+    tmp_path,
+    monkeypatch,
+):
+    from mtg_carddb.jsonl_limits import (
+        iter_bounded_gzip_lines,
+    )
+
+    path = tmp_path / "too-long.gz"
+
+    path.write_bytes(
+        gzip.compress(
+            b'{"object":"card","id":"long"}\n'
+        )
+    )
+
+    monkeypatch.setattr(
+        acquisition,
+        "iter_bounded_gzip_lines",
+        lambda src: iter_bounded_gzip_lines(
+            src,
+            max_record_bytes=12,
+        ),
+    )
+
+    with pytest.raises(
+        BulkAcquisitionError,
+        match="line 1 exceeds 12 bytes",
+    ):
+        acquisition._validate_jsonl_gzip(
+            path,
+            "default_cards",
+            "card",
+        )
+
+
+def test_validation_rejects_excessive_decompressed_total(
+    tmp_path,
+    monkeypatch,
+):
+    from mtg_carddb.jsonl_limits import (
+        iter_bounded_gzip_lines,
+    )
+
+    path = tmp_path / "too-much.gz"
+
+    path.write_bytes(
+        gzip.compress(
+            b'{"object":"card"}\n' * 4
+        )
+    )
+
+    monkeypatch.setattr(
+        acquisition,
+        "iter_bounded_gzip_lines",
+        lambda src: iter_bounded_gzip_lines(
+            src,
+            max_total_bytes=40,
+        ),
+    )
+
+    with pytest.raises(
+        BulkAcquisitionError,
+        match="export exceeds 40 bytes",
+    ):
+        acquisition._validate_jsonl_gzip(
+            path,
+            "default_cards",
+            "card",
+        )

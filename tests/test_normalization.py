@@ -543,3 +543,41 @@ def test_reversible_adventure_conflicting_mana_values_fail():
         NormalizationError, match="different mana values"
     ):
         normalize_printing(source, vocabulary)
+
+
+def test_subtype_parser_backtracks_when_longest_prefix_dead_ends():
+    vocabulary = TypeVocabulary(
+        supertypes=set(),
+        card_types={"Creature"},
+        subtypes={"A", "A B", "B C"},
+    )
+
+    assert vocabulary.parse(
+        "Creature — A B C"
+    )[2] == frozenset({"A", "B C"})
+
+
+def test_subtype_parser_keeps_longest_valid_match_preference():
+    vocabulary = TypeVocabulary(
+        supertypes=set(),
+        card_types={"Creature"},
+        subtypes={"A", "A B", "B C", "C"},
+    )
+
+    assert vocabulary.parse(
+        "Creature — A B C"
+    )[2] == frozenset({"A B", "C"})
+
+
+def test_subtype_parser_rejects_unsatisfiable_sequence():
+    vocabulary = TypeVocabulary(
+        supertypes=set(),
+        card_types={"Creature"},
+        subtypes={"A B", "B C"},
+    )
+
+    with pytest.raises(
+        NormalizationError,
+        match="unrecognized subtype",
+    ):
+        vocabulary.parse("Creature — A B C")

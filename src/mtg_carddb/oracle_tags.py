@@ -6,7 +6,6 @@ public query API; they are never written as inferred card_tags rows.
 
 from __future__ import annotations
 
-import gzip
 import json
 import sqlite3
 import zlib
@@ -16,6 +15,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .jsonl_limits import (
+    JSONLSizeError,
+    iter_bounded_gzip_lines,
+)
 
 class OracleTagFormatError(ValueError):
     """The Oracle Tag source has invalid or inconsistent content."""
@@ -37,46 +40,84 @@ def _reject_constant(value: str) -> None:
     raise ValueError(f"non-JSON numeric constant {value!r}")
 
 
-def iter_oracle_tags(path: str | Path) -> Iterator[dict[str, Any]]:
-    """Yield Oracle Tag objects from a local gzip-compressed JSONL file.
+def iter_oracle_tags(
+    path: str | Path,
+) -> Iterator[dict[str, Any]]:
+    """Yield Oracle Tag records from bounded gzip JSONL.
 
-    Exhaust the iterator to validate the gzip checksum and trailing length.
-    This reader performs no networking and retains only one tag object at once.
+    Exhaustion verifies the gzip checksum and trailer.
     """
     if not isinstance(path, (str, Path)):
-        raise TypeError("path must be a string or Path")
+        raise TypeError(
+            "path must be a string or Path"
+        )
+
     source = Path(path).expanduser()
     line_no = 0
     count = 0
+
     try:
         with source.open("rb") as stream:
             if stream.read(2) != b"\x1f\x8b":
                 raise OracleTagFormatError(
-                    f"{source}: expected gzip-compressed JSON Lines"
+                    f"{source}: expected "
+                    "gzip-compressed JSON Lines"
                 )
-        with gzip.open(source, "rt", encoding="utf-8", errors="strict") as stream:
-            for line_no, line in enumerate(stream, start=1):
-                if not line.strip():
-                    raise OracleTagFormatError(
-                        f"{source}: blank JSONL record on line {line_no}"
-                    )
-                try:
-                    obj = json.loads(line, parse_constant=_reject_constant)
-                except (ValueError, json.JSONDecodeError) as exc:
-                    raise OracleTagFormatError(
-                        f"{source}: invalid JSON on line {line_no}: {exc}"
-                    ) from exc
-                if not isinstance(obj, dict) or obj.get("object") != "tag":
-                    raise OracleTagFormatError(
-                        f"{source}: line {line_no} is not a Scryfall Tag object"
-                    )
-                count += 1
-                yield obj
+
+        for line_no, line in iter_bounded_gzip_lines(
+            source
+        ):
+            if not line.strip():
+                raise OracleTagFormatError(
+                    f"{source}: blank JSONL record "
+                    f"on line {line_no}"
+                )
+
+            try:
+                obj = json.loads(
+                    line,
+                    parse_constant=_reject_constant,
+                )
+            except (
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                raise OracleTagFormatError(
+                    f"{source}: invalid JSON "
+                    f"on line {line_no}: {exc}"
+                ) from exc
+
+            if (
+                not isinstance(obj, dict)
+                or obj.get("object") != "tag"
+            ):
+                raise OracleTagFormatError(
+                    f"{source}: line {line_no} "
+                    "is not a Scryfall Tag object"
+                )
+
+            count += 1
+            yield obj
+
         if not count:
-            raise OracleTagFormatError(f"{source}: no tag records found")
-    except (OSError, EOFError, zlib.error, UnicodeError) as exc:
+            raise OracleTagFormatError(
+                f"{source}: no tag records found"
+            )
+
+    except JSONLSizeError as exc:
+        raise OracleTagFormatError(
+            f"{source}: {exc}"
+        ) from exc
+
+    except (
+        OSError,
+        EOFError,
+        zlib.error,
+        UnicodeError,
+    ) as exc:
         raise OracleTagReadError(
-            f"could not read {source} near line {line_no}: {exc}"
+            f"could not read {source} "
+            f"near line {line_no}: {exc}"
         ) from exc
 
 
