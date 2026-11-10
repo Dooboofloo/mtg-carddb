@@ -174,3 +174,84 @@ def test_validator_rejects_non_sqlite_file(tmp_path):
 
     with pytest.raises(SnapshotActivationError):
         _validate_snapshot(file)
+
+
+def test_create_only_activation_installs_new_target(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.sqlite"
+    target = tmp_path / "installed.sqlite"
+    source.write_bytes(b"verified snapshot")
+
+    monkeypatch.setattr(
+        activation, "_validate_snapshot", lambda _: None
+    )
+
+    result = activate_snapshot(
+        source,
+        target,
+        replace_existing=False,
+    )
+
+    assert result == target
+    assert source.read_bytes() == b"verified snapshot"
+    assert target.read_bytes() == b"verified snapshot"
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "installed.sqlite",
+        "source.sqlite",
+    ]
+
+
+def test_create_only_activation_refuses_existing_target(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.sqlite"
+    target = tmp_path / "installed.sqlite"
+    source.write_bytes(b"new")
+    target.write_bytes(b"existing")
+
+    monkeypatch.setattr(
+        activation, "_validate_snapshot", lambda _: None
+    )
+
+    with pytest.raises(FileExistsError):
+        activate_snapshot(
+            source,
+            target,
+            replace_existing=False,
+        )
+
+    assert target.read_bytes() == b"existing"
+    assert source.read_bytes() == b"new"
+
+
+def test_create_only_activation_rejects_racing_target(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source.sqlite"
+    target = tmp_path / "installed.sqlite"
+    source.write_bytes(b"verified")
+
+    def validate(_staged):
+        # Another process creates the target after our initial
+        # existence check but before the installation.
+        target.write_bytes(b"other process")
+
+    monkeypatch.setattr(
+        activation, "_validate_snapshot", validate
+    )
+
+    with pytest.raises(FileExistsError):
+        activate_snapshot(
+            source,
+            target,
+            replace_existing=False,
+        )
+
+    assert target.read_bytes() == b"other process"
+    assert source.read_bytes() == b"verified"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "installed.sqlite",
+        "source.sqlite",
+    ]

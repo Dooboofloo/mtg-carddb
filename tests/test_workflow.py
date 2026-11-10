@@ -1,0 +1,254 @@
+"""Offline init/update tests. No Scryfall requests or real imports."""
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from mtg_carddb import activation, workflow
+from mtg_carddb.builder import SnapshotBuildResult
+from mtg_carddb.workflow import (
+    DatabaseWorkflowError,
+    initialize_database,
+    update_database,
+)
+
+
+def fake_pipeline(monkeypatch):
+    steps = []
+
+    def acquire(directory):
+        steps.append("bulk")
+        directory.mkdir()
+
+        cards = directory / "cards.gz"
+        tags = directory / "tags.gz"
+
+        cards.write_bytes(b"cards")
+        tags.write_bytes(b"tags")
+
+        return SimpleNamespace(
+            cards_path=cards,
+            tags_path=tags,
+            bulk_sources=("verified-manifest",),
+        )
+
+    def capture(directory):
+        steps.append("references")
+        directory.mkdir()
+
+        return SimpleNamespace(directory=directory)
+
+    def build(
+        *,
+        cards_path,
+        tags_path,
+        output_path,
+        bulk_sources,
+        reference_archive,
+    ):
+        steps.append("build")
+
+        assert cards_path.read_bytes() == b"cards"
+        assert tags_path.read_bytes() == b"tags"
+        assert bulk_sources == ("verified-manifest",)
+        assert reference_archive.directory.is_dir()
+
+        output_path.write_bytes(b"new database")
+
+        return SnapshotBuildResult(
+            path=output_path,
+            sets=1,
+            printings=2,
+            excluded_printings=0,
+            cards=1,
+            historical_observations=1,
+            tags=1,
+            taggings=1,
+            art_only_oracle_ids=0,
+            excluded_art_taggings=0,
+            provenance_sources=10,
+        )
+
+    monkeypatch.setattr(
+        workflow, "acquire_bulk_sources", acquire
+    )
+    monkeypatch.setattr(
+        workflow, "capture_reference_sources", capture
+    )
+    monkeypatch.setattr(
+        workflow, "build_snapshot", build
+    )
+
+    # Fixture snapshots contain test bytes, not actual SQLite.
+    # The real validator is covered by activation tests.
+    monkeypatch.setattr(
+        activation, "_validate_snapshot", lambda _: None
+    )
+
+    return steps
+
+
+def assert_workspace_clean(directory, target):
+    assert not list(
+        directory.glob(f".{target.stem}-build-*")
+    )
+    assert not Path(
+        str(target) + ".workflow.lock"
+    ).exists()
+
+
+def test_init_creates_database_and_cleans_workspace(
+    tmp_path, monkeypatch
+):
+    steps = fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+
+    result = initialize_database(target)
+
+    assert result.operation == "init"
+    assert result.path == target
+    assert result.build.path == target
+    assert result.build.provenance_sources == 10
+    assert target.read_bytes() == b"new database"
+
+    assert steps == [
+        "bulk", "references", "build"
+    ]
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_update_replaces_existing_database(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"old database")
+
+    result = update_database(target)
+
+    assert result.operation == "update"
+    assert result.build.cards == 1
+    assert target.read_bytes() == b"new database"
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_init_refuses_existing_database_before_fetch(
+    tmp_path, monkeypatch
+):
+    steps = fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"keep")
+
+    with pytest.raises(
+        FileExistsError, match="already exists"
+    ):
+        initialize_database(target)
+
+    assert target.read_bytes() == b"keep"
+    assert steps == []
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_update_refuses_missing_database_before_fetch(
+    tmp_path, monkeypatch
+):
+    steps = fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+
+    with pytest.raises(
+        FileNotFoundError, match="cannot update"
+    ):
+        update_database(target)
+
+    assert steps == []
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_failed_build_preserves_installed_database(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"old database")
+
+    def fail_build(**_kwargs):
+        raise ValueError("failed import")
+
+    monkeypatch.setattr(
+        workflow, "build_snapshot", fail_build
+    )
+
+    with pytest.raises(
+        ValueError, match="failed import"
+    ):
+        update_database(target)
+
+    assert target.read_bytes() == b"old database"
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_failed_activation_preserves_installed_database(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    target.write_bytes(b"old database")
+
+    def fail_activate(*_args, **_kwargs):
+        raise RuntimeError("candidate rejected")
+
+    monkeypatch.setattr(
+        workflow, "activate_snapshot", fail_activate
+    )
+
+    with pytest.raises(
+        RuntimeError, match="candidate rejected"
+    ):
+        update_database(target)
+
+    assert target.read_bytes() == b"old database"
+    assert_workspace_clean(tmp_path, target)
+
+
+def test_workflow_lock_blocks_other_operations(
+    tmp_path, monkeypatch
+):
+    steps = fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    lock = Path(str(target) + ".workflow.lock")
+    lock.write_text("another process")
+
+    with pytest.raises(
+        DatabaseWorkflowError, match="may be running"
+    ):
+        initialize_database(target)
+
+    assert steps == []
+    assert lock.read_text() == "another process"
+
+
+def test_init_does_not_replace_racing_target(
+    tmp_path, monkeypatch
+):
+    fake_pipeline(monkeypatch)
+    target = tmp_path / "carddb.sqlite"
+    actual_activate = workflow.activate_snapshot
+
+    def race(*args, **kwargs):
+        target.write_bytes(
+            b"another process created this"
+        )
+        return actual_activate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        workflow, "activate_snapshot", race
+    )
+
+    with pytest.raises(FileExistsError):
+        initialize_database(target)
+
+    assert target.read_bytes() == (
+        b"another process created this"
+    )
+    assert_workspace_clean(tmp_path, target)

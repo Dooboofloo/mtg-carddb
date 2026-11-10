@@ -69,6 +69,8 @@ def _validate_snapshot(path: Path) -> None:
 def activate_snapshot(
     snapshot_path: str | Path,
     target_path: str | Path,
+    *,
+    replace_existing: bool = True,
 ) -> Path:
     """Atomically activate a verified snapshot at an explicit destination.
 
@@ -82,6 +84,9 @@ def activate_snapshot(
     activators. If the process is killed, a stale lock may need
     manual removal.
     """
+    if type(replace_existing) is not bool:
+        raise TypeError("replace_existing must be a bool")
+
     source = Path(snapshot_path)
     target = Path(target_path)
 
@@ -103,6 +108,11 @@ def activate_snapshot(
     if target.exists() and not target.is_file():
         raise SnapshotActivationError(
             "target exists but is not a regular file"
+        )
+
+    if not replace_existing and target.exists():
+        raise FileExistsError(
+            f"database already exists: {target}"
         )
 
     if source.resolve() == target.resolve():
@@ -165,14 +175,30 @@ def activate_snapshot(
         _validate_snapshot(staged)
 
         try:
-            os.replace(staged, target)
+            if replace_existing:
+                # Updates atomically replace the old database.
+                os.replace(staged, target)
+                staged = None
+            else:
+                # Initialization installs only if the target does not
+                # exist. The new hard link points to the verified copy.
+                # Keep `staged` for deletion by the existing finally block.
+                os.link(staged, target)
+
+        except FileExistsError:
+            # For create-only installation, never overwrite a target
+            # that appeared during validation.
+            raise
+
         except OSError as exc:
+            action = (
+                "replace" if replace_existing else "install"
+            )
             raise SnapshotActivationError(
-                f"could not replace {target}; "
+                f"could not {action} {target}; "
                 f"existing database unchanged: {exc}"
             ) from exc
 
-        staged = None
         return target
 
     finally:
