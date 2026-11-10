@@ -32,6 +32,11 @@ from .provenance import (
     verify_bulk_sources,
     write_bulk_sources,
 )
+from .reference_sources import ReferenceArchive
+from .reference_integration import (
+    replay_reference_archive,
+    write_reference_sources,
+)
 
 class SnapshotBuildError(RuntimeError):
     """A generated snapshot failed validation."""
@@ -111,6 +116,7 @@ def build_snapshot(
     *,
     references: ReferenceData | None = None,
     bulk_sources: Iterable[BulkSource] | None = None,
+    reference_archive: ReferenceArchive | str | Path | None = None,
 ) -> SnapshotBuildResult:
     """Build a new verified database without replacing existing files.
 
@@ -120,6 +126,11 @@ def build_snapshot(
     On ingestion or validation failure, the incomplete output is
     deleted. Source files are never modified.
     """
+
+    if references is not None and reference_archive is not None:
+        raise ValueError(
+            "references and reference_archive are mutually exclusive"
+        )
 
     cards_path = Path(cards_path)
     tags_path = Path(tags_path)
@@ -136,7 +147,13 @@ def build_snapshot(
                 f"source file not found: {source}"
             )
 
-    if references is None:
+    verified_reference_archive = None
+
+    if reference_archive is not None:
+        references, verified_reference_archive = (
+            replay_reference_archive(reference_archive)
+        )
+    elif references is None:
         references = fetch_reference_data()
 
     # Derive exclusions from raw Oracle IDs, not from the subset
@@ -186,6 +203,12 @@ def build_snapshot(
                 connection,
                 verified_sources,
             )
+
+            if verified_reference_archive is not None:
+                provenance_count += write_reference_sources(
+                    connection,
+                    verified_reference_archive,
+                )
 
         # Minimal builder metadata. Detailed Scryfall source
         # provenance will be handled by a later milestone.
