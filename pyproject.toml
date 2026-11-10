@@ -13,7 +13,12 @@ license-files = ["LICENSE"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "build>=1.2"]
+dev = [
+    "pytest>=8",
+    "pytest-socket>=0.7",
+    "build>=1.2",
+    "twine>=6",
+]
 
 [project.scripts]
 mtg-carddb = "mtg_carddb.cli:main"

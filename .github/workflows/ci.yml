@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install package and development tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests with network access blocked
+        run: python -m pytest -q --disable-socket
+
+  distributions:
+    name: Build and test distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: python -m pip install "build>=1.2" "twine>=6"
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Validate distribution metadata
+        run: python -m twine check --strict dist/*
+
+      - name: Smoke-test wheel in isolated environment
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/carddb-wheel"
+          "$RUNNER_TEMP/carddb-wheel/bin/python" -m pip install --no-index --no-deps dist/*.whl
+
+          cd "$RUNNER_TEMP"
+
+          "$RUNNER_TEMP/carddb-wheel/bin/python" -I -c 'from pathlib import Path; import mtg_carddb as m; assert "site-packages" in str(Path(m.__file__).resolve()); assert callable(m.initialize_database); print(m.__file__)'
+
+          "$RUNNER_TEMP/carddb-wheel/bin/python" -m mtg_carddb --help
+          "$RUNNER_TEMP/carddb-wheel/bin/mtg-carddb" --help
+          "$RUNNER_TEMP/carddb-wheel/bin/mtg-carddb" locks --database "$RUNNER_TEMP/nonexistent-carddb.sqlite"
+
+      - name: Smoke-test sdist in isolated environment
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/carddb-sdist"
+          "$RUNNER_TEMP/carddb-sdist/bin/python" -m pip install --no-deps dist/*.tar.gz
+
+          cd "$RUNNER_TEMP"
+
+          "$RUNNER_TEMP/carddb-sdist/bin/python" -I -c 'from pathlib import Path; import mtg_carddb as m; assert "site-packages" in str(Path(m.__file__).resolve()); assert callable(m.update_database); print(m.__file__)'
+
+          "$RUNNER_TEMP/carddb-sdist/bin/python" -m mtg_carddb --help
+          "$RUNNER_TEMP/carddb-sdist/bin/mtg-carddb" --help
+
+      - name: Preserve validated distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: mtg-carddb-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
