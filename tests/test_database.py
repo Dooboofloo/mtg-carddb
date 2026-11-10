@@ -432,3 +432,21 @@ def test_aggregate_color_matches_reference_predicate(db_path):
                 assert db.by_color(
                     query, match=mode
                 ) == expected
+
+
+def test_open_missing_database_suggests_initialization(
+    tmp_path,
+):
+    from mtg_carddb.database import CardDatabase
+    from mtg_carddb.freshness import DatabaseNotInitializedError
+    from mtg_carddb.storage import DatabaseOpenError
+
+    target = tmp_path / "missing-carddb.sqlite"
+
+    with pytest.raises(DatabaseNotInitializedError) as exc_info:
+        CardDatabase.open(target)
+
+    assert isinstance(exc_info.value, DatabaseOpenError)
+    assert isinstance(exc_info.value, FileNotFoundError)
+    assert "init" in str(exc_info.value)
+    assert not target.exists()

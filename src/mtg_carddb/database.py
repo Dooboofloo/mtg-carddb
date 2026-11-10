@@ -10,6 +10,11 @@ from typing import Literal
 
 from .models import Card, DatabaseInfo, Legality, SetInfo, SetRarity, Tag, Tagging
 from .storage import SQLiteStore
+from .freshness import (
+    DEFAULT_STALE_AFTER_DAYS,
+    require_database_file,
+    report_database_freshness,
+)
 
 _COLOR_BITS = {"W": 1, "U": 2, "B": 4, "R": 8, "G": 16}
 _MANA_BITS = {**_COLOR_BITS, "C": 32}
@@ -104,13 +109,53 @@ class CardDatabase:
         self._closed = False
 
     @classmethod
-    def open(cls, path: str | Path | None = None) -> CardDatabase:
-        store = SQLiteStore.open(
-            _default_database_path() if path is None else path
+    def open(
+        cls,
+        path: str | Path | None = None,
+        *,
+        warn_if_stale: bool = True,
+        stale_after_days: float = DEFAULT_STALE_AFTER_DAYS,
+    ) -> CardDatabase:
+        """Open an existing read-only CardDB database.
+
+        Raises DatabaseNotInitializedError when the database is missing.
+
+        By default, logs a nonfatal warning if the Scryfall source data
+        is stale or its freshness cannot be established. Warnings can
+        be disabled or the age threshold customized.
+
+        Opening never downloads, rebuilds, or modifies the database.
+        """
+        if type(warn_if_stale) is not bool:
+            raise TypeError("warn_if_stale must be a bool")
+
+        resolved_path = (
+            _default_database_path()
+            if path is None
+            else Path(path)
         )
+
+        # Fail with an actionable initialization message instead
+        # of allowing SQLite to report a generic missing-file error.
+        require_database_file(resolved_path)
+
+        store = SQLiteStore.open(resolved_path)
+
         try:
-            return cls(store)
+            database = cls(store)
+
+            if warn_if_stale:
+                report_database_freshness(
+                    database.info(),
+                    resolved_path,
+                    stale_after_days=stale_after_days,
+                )
+
+            return database
+
         except BaseException:
+            # Includes failures during object construction or
+            # freshness inspection. Never leak an opened connection.
             store.close()
             raise
 
