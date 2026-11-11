@@ -1,195 +1,102 @@
 # Releasing MTG CardDB
 
-This document describes the checks and publication procedure for an MTG CardDB release.
+MTG CardDB is published on [PyPI](https://pypi.org/project/mtg-carddb/). The first public release was `0.1.0`; **`1.0.0` is the next intended feature release**. Releases are prepared and published by the maintainer, not automatically on every push.
 
-The initial planned release is 0.1.0. The Python package version and SQLite schema version are independent; 0.1.0 currently writes and reads SQLite schema version 1.
+The Python package version and SQLite schema version are independent. The initial release uses SQLite schema version 1. Consult [the schema specification](schema.md) and the storage reader before changing that version.
 
-## Release requirements
+## Proportionate release checks
 
-Before creating a tag:
+For an ordinary release:
 
-- Confirm the intended API and schema documentation matches the code.
-- Confirm all offline tests pass.
-- Confirm GitHub Actions is green on the release commit.
-- Confirm wheel and source-distribution builds succeed.
-- Confirm clean wheel installation and both CLI entry points work.
-- Confirm the release has had a recent successful real-Scryfall import when acquisition or ingestion has changed.
-- Review release notes, known limitations, license, attribution, and distribution contents.
-- Check that no credentials, downloaded bulk files, or unintended local data are included.
-- Decide whether the release is a preview, prerelease, or stable publication.
+1. Review the changes, user-facing documentation, changelog, and version in `pyproject.toml`.
+2. Run the existing offline tests. Confirm the release commit passes CI.
+3. Build and validate the wheel and source distribution, and verify a clean installation. CI already exercises both distribution formats.
+4. Ensure the tag points to the verified release commit, then publish the GitHub release and authorize the separate PyPI workflow.
 
-Do not tag an unverified commit or publish a distribution from a different source revision.
+**Extra live-data checks are change-driven.** Repeat an end-to-end Scryfall import when acquisition, normalization, or the persisted schema changes materially, or when there is a specific upstream-compatibility concern. Documentation-only changes do not require another bulk download.
 
-## 1. Check the working tree
+This is a lightweight workflow for a solo-maintained library, not a guarantee that every possible bug has been caught. Avoid weakening the existing offline tests or bypassing a failing release check merely to ship faster.
 
-From the repository root:
+## 1. Prepare and test
+
+From the repository root (PowerShell):
 
 ```powershell
+python -m pip install -e ".[dev]"
+python -m pytest -q --disable-socket
+
 git status
 git diff --check
 git log -1 --oneline
 ```
 
-The release should come from a clean, committed working tree.
+Verify the working tree is clean and that `pyproject.toml`, `CHANGELOG.md`, and public docs describe the intended version. For a schema change, update `src/mtg_carddb/schema.py`, `docs/schema.md`, the builder and reader compatibility logic, and the corresponding tests together. `tests/test_schema.py` checks that the first SQL block in `docs/schema.md` matches `SCHEMA_SQL` exactly.
 
-Verify that the version in `pyproject.toml` is the intended release version.
-
-Before changing the SQLite schema, check the matching schema version in `src/mtg_carddb/schema.py` and the compatibility policy in `src/mtg_carddb/storage.py`.
-
-## 2. Run offline tests
-
-```powershell
-python -m pip install -e ".[dev]"
-python -m pytest -q --disable-socket
-```
-
-These tests must not reach Scryfall.
-
-A change to the normalized database schema must retain the exact correspondence between `SCHEMA_SQL` and the first SQL code block in `docs/schema.md`.
-
-Do not use the number of passing tests alone as a compatibility guarantee.
-
-## 3. Build clean distributions
-
-Remove older local distributions so that old versions cannot accidentally be included:
+Build clean distributions:
 
 ```powershell
 Remove-Item .\dist -Recurse -Force -ErrorAction SilentlyContinue
 python -m build
-```
 
-Select the newly built wheel and source distribution:
-
-```powershell
 $wheel = Get-ChildItem .\dist\*.whl | Select-Object -First 1
 $sdist = Get-ChildItem .\dist\*.tar.gz | Select-Object -First 1
-
-if (-not $wheel -or -not $sdist) {
-    throw "Expected both a wheel and source distribution"
-}
-
+if (-not $wheel -or -not $sdist) { throw "Expected wheel and sdist" }
 python -m twine check --strict $wheel.FullName $sdist.FullName
 ```
 
-Confirm that the artifacts have the intended version and that exactly the expected archives are present.
-
-Inspect the contents if packaging files or dependencies changed:
+When package metadata or build configuration changes, inspect archive contents to avoid shipping caches, credentials, Scryfall exports, or generated SQLite databases:
 
 ```powershell
 python -m zipfile -l $wheel.FullName
 tar -tzf $sdist.FullName
 ```
 
-The wheel should contain the installed library and metadata, not downloaded Scryfall datasets, caches, test fixtures, or secrets.
+CI also performs isolated wheel and source-distribution installation smoke tests. For a release, verify that CI is green on the actual release commit. You can run additional local install checks if a packaging change warrants them.
 
-## 4. Test installation independently
+## 2. Create the release tag
 
-Create a new virtual environment outside the repository:
-
-```powershell
-$smoke = Join-Path $env:TEMP (
-    "mtg-carddb-release-" + [guid]::NewGuid().ToString("N")
-)
-
-python -m venv $smoke
-
-$python = Join-Path $smoke "Scripts\python.exe"
-$command = Join-Path $smoke "Scripts\mtg-carddb.exe"
-
-& $python -m pip install --no-deps $wheel.FullName
-
-Push-Location $env:TEMP
-
-& $python -I -c "import mtg_carddb as m; print(m.default_database_path()); print(m.CardDatabase); print(m.initialize_database)"
-
-& $python -m mtg_carddb --help
-& $command --help
-& $command locks --database (
-    Join-Path $env:TEMP "carddb-release-check.sqlite"
-)
-
-Pop-Location
-```
-
-Use another clean virtual environment for a source-distribution installation when packaging configuration has changed. The automated CI distribution job performs both installation types.
-
-These smoke tests should not download Scryfall data.
-
-## 5. Verify live-data compatibility
-
-This is separate from ordinary CI.
-
-Use `mtg-carddb init --database PATH` with a fresh temporary destination when a new full build is warranted. Check successful acquisition, reference capture, import, snapshot validation, and final activation.
-
-Record the Scryfall source timestamps and import counts used for the validation in the release notes or associated validation log.
-
-The normal workflow records source provenance in SQLite but deletes temporary source files. A successful build is not sufficient evidence that the original source bytes have been archived for reproducibility.
-
-When auditing upstream changes, compare selected normalized Oracle identities and historical observations against independent source records. Record which checks were performed rather than implying every possible equivalence property was independently verified.
-
-## 6. Confirm CI
-
-Push the release-preparation commit and inspect GitHub Actions.
-
-The release commit must pass:
-
-- Ubuntu, Windows, and macOS on supported Python versions.
-- Offline tests with sockets disabled.
-- Wheel and source-distribution builds.
-- Strict distribution metadata validation.
-- Clean installation smoke tests.
-
-Wait for the final result before creating the release tag.
-
-## 7. Create the release tag
-
-For version 0.1.0, once the intended commit is verified:
+For the upcoming 1.0 release, **after** committing and pushing the verified changes:
 
 ```powershell
-git tag -a v0.1.0 -m "MTG CardDB 0.1.0"
-git push origin v0.1.0
+git tag -a v1.0.0 -m "MTG CardDB 1.0.0"
+git push origin v1.0.0
 ```
 
-Do not reuse or move a published version tag. If a release needs corrections after publication, create a new version.
+Substitute the actual version for later releases. Do not move or reuse a tag after publication; release a new version for corrections.
 
-## 8. Publish a GitHub release
+## 3. Publish the GitHub release
 
-In the repository's GitHub Releases interface:
+At [GitHub Releases](https://github.com/Dooboofloo/mtg-carddb/releases):
 
-1. Draft a new release using the verified version tag.
-2. Summarize the features, installation requirements, and known limitations from `CHANGELOG.md`.
-3. Mark it as a prerelease if the release is intended as an early preview.
-4. Attach the validated wheel and source distribution if providing downloadable archives.
-5. Review the page and publish.
+1. Draft a release from the verified tag.
+2. Use the changelog to describe important changes and known limitations.
+3. Use **pre-release** only when you intend that release to be a preview; the planned v1.0.0 release is intended as a normal stable release.
+4. Attach the wheel and source distribution if desired, review the notes, and publish.
 
-Building and attaching artifacts is different from publishing them to a package index.
+GitHub release assets are separate from the PyPI publication workflow, which rebuilds from the selected Git tag.
 
-## 9. Optional PyPI publication
+## 4. Publish to PyPI (manual approval)
 
-PyPI publication is a separate decision and is not configured by the current CI workflow.
+The repository's [Publish to PyPI workflow](https://github.com/Dooboofloo/mtg-carddb/actions/workflows/publish.yml) is manually triggered; normal CI cannot publish. It uses a configured GitHub `pypi` environment and PyPI Trusted Publishing, without a stored long-lived PyPI token.
 
-Before publishing:
+1. Open **Actions → Publish to PyPI → Run workflow**.
+2. Run it from `main` and enter the **existing release tag**, e.g. `v1.0.0`.
+3. The workflow checks out that tag, confirms the version matches `pyproject.toml`, runs offline tests, and builds and validates one wheel and one source distribution.
+4. Approve the protected `pypi` environment when prompted. Only the publishing job receives the OIDC permission to upload.
+5. Confirm the publication job succeeds.
 
-- Verify that the intended PyPI project name is available or owned by the maintainer.
-- Review the package metadata and the exact artifacts to upload.
-- Prefer PyPI Trusted Publishing with GitHub Actions OIDC over storing long-lived package-index credentials.
-- Ensure publication is limited to an explicitly authorized release event.
-- Do not publish a version number that has already been uploaded to PyPI.
+Publishing a new version updates the PyPI project description from the README embedded in that release. **Changes to GitHub's README do not automatically update an already-uploaded PyPI release.** A version already uploaded to PyPI cannot be replaced with another build of the same version.
 
-See the official PyPI publishing documentation:
+## 5. Verify the released package
 
-https://docs.pypi.org/publishing/publishing-to-pypi/
+In a clean environment outside the repository, install the **published** version and exercise the CLI:
 
-The project's standard CI must remain free of publication credentials and permissions.
+```powershell
+python -m pip install --upgrade "mtg-carddb==1.0.0"
+mtg-carddb --help
+python -c "from mtg_carddb import CardDatabase; print(CardDatabase)"
+```
 
-## 10. Post-release verification
+For later releases, substitute the released version. Check the PyPI project page and GitHub release notes. A documentation-only GitHub update does not require another release unless the PyPI description needs to change.
 
-After publication:
-
-- Confirm the GitHub release and its source commit are correct.
-- Confirm the displayed release notes and README are accurate.
-- If published to PyPI, install that exact released version in a fresh environment and exercise the CLI.
-- Record reported regressions and compatibility issues in the issue tracker.
-- Prepare a new patch version for any necessary corrections.
-
-Do not assume a released package can recreate identical Scryfall data at a later date without archived source inputs.
+If the release introduces a bug, record it and publish a new patch version after testing the fix. CardDB source provenance does not imply that Scryfall exports are archived for byte-identical future rebuilds.

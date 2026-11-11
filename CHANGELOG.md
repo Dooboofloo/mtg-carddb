@@ -8,7 +8,7 @@ The project follows a `MAJOR.MINOR.PATCH` version scheme. Releases below 1.0.0 m
 
 No changes recorded yet.
 
-## 0.1.0 — Initial release candidate
+## 0.1.0 — First public release
 
 ### Added
 

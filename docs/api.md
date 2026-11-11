@@ -4,6 +4,7 @@
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
 **Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).
+**Release plan:** [`roadmap.md`](roadmap.md) (the existing API is the intended foundation for v1.0).
 
 ## 1. Purpose and design boundaries
 

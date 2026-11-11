@@ -45,7 +45,7 @@ The persisted schema is documented in [docs/schema.md](docs/schema.md).
 
 Do not change the SQL schema silently. A schema change requires coordinated changes to its documentation, builder, reader compatibility checks, tests, and SQLite schema version policy.
 
-The current implementation is pre-1.0. API changes should still be deliberate and documented, even though its interface is not yet declared fully stable.
+The library is preparing for a stable 1.0 API. Existing public names and query meanings should only be changed deliberately. After 1.0, prefer backward-compatible additions in minor releases and reserve intentionally incompatible public API changes for a major release; the SQLite schema retains its own compatibility/versioning policy.
 
 ## Scryfall import changes
 
@@ -55,7 +55,7 @@ Preserve the distinction between known-empty and missing source fields. Keep his
 
 An unsupported required source shape should produce a diagnostic failure, not fabricated values or a partially activated database.
 
-Real Scryfall integration runs are separate from the offline test suite. Perform them explicitly when changing normalization, import logic, source acquisition, or the on-disk schema. Avoid unnecessary API requests; use bulk exports rather than per-card downloads.
+Real Scryfall integration runs are separate from the offline test suite. Run them when normalization, acquisition, or storage changes materially, or when an upstream-compatibility issue requires one; they are not required for documentation-only changes. Avoid unnecessary API requests; use bulk exports rather than per-card downloads.
 
 ## Reporting issues
 
@@ -67,6 +67,6 @@ For security-sensitive reports, avoid posting exploit details publicly before th
 
 ## Releases
 
-See [docs/releasing.md](docs/releasing.md) for the release checklist and compatibility expectations.
+See the [roadmap](docs/roadmap.md) for the short path to 1.0 and [release guide](docs/releasing.md) for the maintainer-controlled GitHub and PyPI workflow. CI and targeted regression checks are the normal quality baseline; exhaustive audits and benchmark gates are not prerequisites for routine releases.
 
 The project is licensed under the [MIT License](LICENSE). Card data supplied by Scryfall is subject to its own terms and attribution requirements.
