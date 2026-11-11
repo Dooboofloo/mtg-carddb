@@ -77,19 +77,38 @@ class IndexStore:
         self,
         loaders: Mapping[str, CategoryLoader],
         *,
-        valid_ids: Iterable[str] | None = None,
+        valid_ids: Iterable[str] | Callable[[], Iterable[str]] | None = None,
     ) -> None:
         self._loaders = dict(loaders)
         for category, loader in self._loaders.items():
             if not isinstance(category, str) or not callable(loader):
                 raise TypeError("loaders must map category names to callables")
 
+        # A callable delays constructing the full ID universe until an indexed
+        # category actually needs validation. Direct lookups can remain cheap.
+        self._valid_ids_loader = valid_ids if callable(valid_ids) else None
         self._valid_ids = (
-            None if valid_ids is None else _freeze_members(valid_ids, None)
+            None if valid_ids is None or callable(valid_ids)
+            else _freeze_members(valid_ids, None)
         )
         self._loaded: dict[str, Mapping[IndexKey, frozenset[str]]] = {}
         self._loading: set[str] = set()
         self._derived: dict[tuple[str, IndexKey], frozenset[str]] = {}
+
+    def _universe(self) -> frozenset[str] | None:
+        if self._valid_ids_loader is not None and self._valid_ids is None:
+            self._valid_ids = _freeze_members(self._valid_ids_loader(), None)
+        return self._valid_ids
+
+    def is_loaded(self, category: str) -> bool:
+        """Whether a category was already hydrated; does not load it."""
+        if category not in self._loaders:
+            raise KeyError(f"unknown index category: {category!r}")
+        return category in self._loaded
+
+    def preload(self, category: str) -> None:
+        """Eagerly hydrate a category for repeated lookups."""
+        self._category(category)
 
     def _category(self, category: str) -> Mapping[IndexKey, frozenset[str]]:
         if category not in self._loaders:
@@ -103,7 +122,7 @@ class IndexStore:
         try:
             index = build_index(
                 self._loaders[category](),
-                valid_ids=self._valid_ids,
+                valid_ids=self._universe(),
             )
         finally:
             self._loading.remove(category)
@@ -133,6 +152,6 @@ class IndexStore:
         """
         cache_key = (namespace, key)
         if cache_key not in self._derived:
-            result = _freeze_members(build(), self._valid_ids)
+            result = _freeze_members(build(), self._universe())
             self._derived[cache_key] = result
         return self._derived[cache_key]

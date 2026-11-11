@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from collections.abc import Iterable
 from math import isfinite
 from pathlib import Path
@@ -19,6 +20,7 @@ from .freshness import (
 _COLOR_BITS = {"W": 1, "U": 2, "B": 4, "R": 8, "G": 16}
 _MANA_BITS = {**_COLOR_BITS, "C": 32}
 _STATUSES = frozenset({"legal", "restricted", "banned", "not_legal"})
+_NAME_CACHE_CAPACITY = 256  # Per database handle; not part of the public API.
 
 
 class UnknownTagError(ValueError):
@@ -112,9 +114,10 @@ class CardDatabase:
 
     def __init__(self, store: SQLiteStore) -> None:
         self._store = store
-        self._indexes = store.index_store()
-        self._ids = store.all_ids()
+        self._ids: frozenset[str] | None = None
+        self._indexes = store.index_store(valid_ids=self.all_cards)
         self._catalog_cache: dict[str, frozenset[str]] = {}
+        self._name_cache: OrderedDict[str, frozenset[str]] = OrderedDict()
         self._closed = False
 
     @classmethod
@@ -187,11 +190,15 @@ class CardDatabase:
 
     def __len__(self) -> int:
         self._ensure_open()
-        return len(self._ids)
+        return len(self._ids) if self._ids is not None else self._store.count_cards()
 
     def __contains__(self, oracle_id: object) -> bool:
         self._ensure_open()
-        return isinstance(oracle_id, str) and oracle_id in self._ids
+        if not isinstance(oracle_id, str):
+            return False
+        if self._ids is not None:
+            return oracle_id in self._ids
+        return self._store.has_card(oracle_id)
 
     def __getitem__(self, oracle_id: str) -> Card:
         card = self.get(oracle_id)
@@ -203,8 +210,6 @@ class CardDatabase:
         self._ensure_open()
         if not isinstance(oracle_id, str):
             raise TypeError("oracle_id must be a string")
-        if oracle_id not in self._ids:
-            return None
         return self._store.load_card(oracle_id)
 
     def resolve(self, oracle_ids: Iterable[str]) -> tuple[Card, ...]:
@@ -217,11 +222,14 @@ class CardDatabase:
         for oracle_id in oracle_ids:
             if not isinstance(oracle_id, str):
                 raise TypeError("each oracle_id must be a string")
-            if oracle_id not in self._ids:
-                raise KeyError(oracle_id)
             ids.add(oracle_id)
 
-        cards = [self[oracle_id] for oracle_id in ids]
+        cards: list[Card] = []
+        for oracle_id in ids:
+            card = self._store.load_card(oracle_id)
+            if card is None:
+                raise KeyError(oracle_id)
+            cards.append(card)
         return tuple(sorted(
             cards,
             key=lambda card: (card.name.casefold(), card.oracle_id),
@@ -233,11 +241,36 @@ class CardDatabase:
 
     def all_cards(self) -> frozenset[str]:
         self._ensure_open()
+        if self._ids is None:
+            self._ids = self._store.all_ids()
         return self._ids
 
     def by_name(self, name: str) -> frozenset[str]:
+        """Find exact card/face names, caching a bounded set of recent queries.
+
+        Isolated names use SQLite without hydrating a global name index.
+        Repeated names, including misses, use a per-handle LRU cache.
+        """
         self._ensure_open()
-        return self._indexes.get("name", _text(name, "name"))
+        key = _text(name, "name")
+        if self._indexes.is_loaded("name"):
+            return self._indexes.get("name", key)
+
+        if key in self._name_cache:
+            self._name_cache.move_to_end(key)
+            return self._name_cache[key]
+
+        result = self._store.ids_by_name(key)
+        self._name_cache[key] = result
+        if len(self._name_cache) > _NAME_CACHE_CAPACITY:
+            self._name_cache.popitem(last=False)
+        return result
+
+    def preload_names(self) -> None:
+        """Load the full name index for applications making many distinct queries."""
+        self._ensure_open()
+        self._indexes.preload("name")
+        self._name_cache.clear()  # The complete index now supersedes these entries.
 
     def _casefold_members(
         self, category: str, value: str

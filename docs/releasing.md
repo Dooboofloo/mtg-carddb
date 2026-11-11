@@ -1,6 +1,6 @@
 # Releasing MTG CardDB
 
-MTG CardDB is published on [PyPI](https://pypi.org/project/mtg-carddb/). The first public release was `0.1.0`; `1.0.0` establishes the stable public Python API. Releases are prepared and published by the maintainer, not automatically on every push.
+MTG CardDB is published on [PyPI](https://pypi.org/project/mtg-carddb/). The first public release was `0.1.0`; `1.0.0` established the stable public Python API, and `1.1.0` adds backward-compatible name-lookup improvements. Releases are prepared and published by the maintainer, not automatically on every push.
 
 The Python package version and SQLite schema version are independent. The initial release uses SQLite schema version 1. Consult [the schema specification](schema.md) and the storage reader before changing that version.
 
@@ -55,11 +55,11 @@ CI also performs isolated wheel and source-distribution installation smoke tests
 
 ## 2. Create the release tag
 
-For the upcoming 1.0 release, **after** committing and pushing the verified changes:
+For the v1.1.0 release, **after** committing and pushing the verified changes:
 
 ```powershell
-git tag -a v1.0.0 -m "MTG CardDB 1.0.0"
-git push origin v1.0.0
+git tag -a v1.1.0 -m "MTG CardDB 1.1.0"
+git push origin v1.1.0
 ```
 
 Substitute the actual version for later releases. Do not move or reuse a tag after publication; release a new version for corrections.
@@ -70,7 +70,7 @@ At [GitHub Releases](https://github.com/Dooboofloo/mtg-carddb/releases):
 
 1. Draft a release from the verified tag.
 2. Use the changelog to describe important changes and known limitations.
-3. Use **pre-release** only for preview versions; v1.0.0 is intended as a normal stable release.
+3. Use **pre-release** only for preview versions; v1.1.0 is intended as a normal stable minor release.
 4. Attach the wheel and source distribution if desired, review the notes, and publish.
 
 GitHub release assets are separate from the PyPI publication workflow, which rebuilds from the selected Git tag.
@@ -80,7 +80,7 @@ GitHub release assets are separate from the PyPI publication workflow, which reb
 The repository's [Publish to PyPI workflow](https://github.com/Dooboofloo/mtg-carddb/actions/workflows/publish.yml) is manually triggered; normal CI cannot publish. It uses a configured GitHub `pypi` environment and PyPI Trusted Publishing, without a stored long-lived PyPI token.
 
 1. Open **Actions → Publish to PyPI → Run workflow**.
-2. Run it from `main` and enter the **existing release tag**, e.g. `v1.0.0`.
+2. Run it from `main` and enter the **existing release tag**, e.g. `v1.1.0`.
 3. The workflow checks out that tag, confirms the version matches `pyproject.toml`, runs offline tests, and builds and validates one wheel and one source distribution.
 4. Approve the protected `pypi` environment when prompted. Only the publishing job receives the OIDC permission to upload.
 5. Confirm the publication job succeeds.
@@ -92,7 +92,7 @@ Publishing a new version updates the PyPI project description from the README em
 In a clean environment outside the repository, install the **published** version and exercise the CLI:
 
 ```powershell
-python -m pip install --upgrade "mtg-carddb==1.0.0"
+python -m pip install --upgrade "mtg-carddb==1.1.0"
 mtg-carddb --help
 python -c "from mtg_carddb import CardDatabase; print(CardDatabase)"
 ```

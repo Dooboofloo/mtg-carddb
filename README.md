@@ -35,6 +35,31 @@ mtg-carddb update
 
 See the [getting started guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/getting-started.md) for database paths, custom locations, CLI options, and troubleshooting.
 
+## Look up a card by name
+
+For a one-off lookup, CardDB opens the local SQLite snapshot without loading
+its full card universe or any inverted indexes:
+
+```python
+from mtg_carddb import CardDatabase
+
+with CardDatabase.open() as db:
+    for card in db.resolve(db.by_name("Sol Ring")):
+        print(card.name, card.oracle_id)
+```
+
+`by_name()` returns a `frozenset[str]` of Oracle IDs, matching a whole-card
+name or an individual face name without regard to case. Unknown names return
+an empty set. The first lookup of a distinct name queries SQLite; up to 256
+recent names, **including misses**, are cached per open database handle for
+fast repeats. The cache uses least-recently-used eviction. For many **distinct**
+names in one session, call `db.preload_names()` once to load the full in-memory
+name index and speed up subsequent queries. This is optional and does not
+change returned results.
+
+Existing schema-v1 databases work unchanged; no `init` or `update` is required
+to use the faster lookup path.
+
 ## Query cards
 
 ```python
@@ -82,6 +107,7 @@ Tags and their hierarchy depend on the installed Scryfall Oracle Tags snapshot. 
 
 ## What it supports
 
+- **Fast exact-name lookup:** low-overhead first access, a bounded per-handle cache for repeated names, and optional full name-index preloading.
 - **Composable inverted-index searches:** color, color identity, card types and subtypes, supertypes, keywords, mana value, produced mana, layouts, and other documented predicates.
 - **Oracle Tags:** direct classification assignments and optional descendant expansion.
 - **Legality and printing history:** current Scryfall format statuses and historical set/rarity/game observations, without conflating unrelated printings.
@@ -96,10 +122,10 @@ CardDB is a mechanical card-data library, **not** a rules engine, full collectio
 - [Getting started and CLI guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/getting-started.md) — paths, options, example queries, and troubleshooting
 - [Python API reference](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/api.md) — public objects, query semantics, lifecycle, and errors
 - [SQLite schema and import specification](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/schema.md) — normalization, relationships, and source guarantees
-- [Roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) — short path to 1.0 and possible follow-on work
+- [Roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) — current milestones and possible follow-on work
 - [Contributing](https://github.com/Dooboofloo/mtg-carddb/blob/main/CONTRIBUTING.md) · [Changelog](https://github.com/Dooboofloo/mtg-carddb/blob/main/CHANGELOG.md) · [Release guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/releasing.md)
 
-**Version 1.0.0** establishes the stable public Python API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
+**Version 1.1.0** adds a fast path for exact-name retrieval and a bounded name cache while preserving the stable 1.x API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
 
 ## Development
 

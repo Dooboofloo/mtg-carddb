@@ -68,6 +68,40 @@ with CardDatabase.open() as db:
     green_cards = db.by_color("G")         # Printed/card colors, not Commander identity
 ```
 
+### Fast individual-name lookup
+
+A single named card does not require hydrating the database's full set of
+Oracle IDs or its entire in-memory name index:
+
+```python
+with CardDatabase.open() as db:
+    cards = db.resolve(db.by_name("Sol Ring"))
+    for card in cards:
+        print(card.name, card.oracle_id)
+```
+
+Name matches are exact and Unicode case-insensitive across whole-card and face
+names. `by_name()` still returns immutable Oracle-ID sets, including an empty
+set for an unknown name. The SQLite path is used for a new name; a per-handle
+bounded LRU cache keeps the **256 most recently used names**, including
+unsuccessful searches. Repeating a name with different casing hits the same
+cache entry.
+
+If you expect **many distinct names** within one opened database, explicitly
+load the complete name index first:
+
+```python
+with CardDatabase.open() as db:
+    db.preload_names()
+    for name in ["Sol Ring", "Command Tower", "Arcane Signet"]:
+        print(name, db.resolve(db.by_name(name)))
+```
+
+`preload_names()` trades a one-time load and memory use for very fast indexed
+lookups, and does not alter matching semantics. Neither approach needs a
+rebuild of an existing schema-v1 database. The name cache and its capacity are
+implementation optimizations, not public 1.x compatibility guarantees.
+
 ### Name lookup and exclusions
 
 ```python

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mtg-carddb"
-version = "1.0.0"
+version = "1.1.0"
 description = "Indexed Magic: The Gathering card queries using set operations"
 readme = "README.md"
 requires-python = ">=3.11"

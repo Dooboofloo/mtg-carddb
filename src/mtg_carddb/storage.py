@@ -7,6 +7,7 @@ Schema creation, import, refresh, and query semantics belong elsewhere.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from .indexes import IndexStore
@@ -86,6 +87,11 @@ class SQLiteStore:
             # URI encoding also handles filenames containing ?, #, and spaces.
             connection = sqlite3.connect(f"{target.as_uri()}?mode=ro", uri=True)
             connection.row_factory = sqlite3.Row
+            # SQLite's built-in NOCASE only folds ASCII. Match the existing
+            # by_name() contract using Python's full Unicode casefold.
+            connection.create_function(
+                "carddb_casefold", 1, str.casefold, deterministic=True,
+            )
             connection.execute("PRAGMA query_only = ON")
         except sqlite3.Error as exc:
             raise DatabaseOpenError(f"cannot open CardDB database: {target}") from exc
@@ -143,6 +149,27 @@ class SQLiteStore:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+    def count_cards(self) -> int:
+        return self._conn().execute("SELECT count(*) FROM cards").fetchone()[0]
+
+    def has_card(self, oracle_id: str) -> bool:
+        return self._conn().execute(
+            "SELECT 1 FROM cards WHERE oracle_id = ?", (oracle_id,)
+        ).fetchone() is not None
+
+    def ids_by_name(self, folded_name: str) -> frozenset[str]:
+        """Search a canonical card name or any face name without hydrating indexes.
+
+        This scans the name columns in SQLite on schema-v1 snapshots. It avoids
+        materializing the complete name index for isolated lookups.
+        """
+        return frozenset(row[0] for row in self._conn().execute(
+            "SELECT oracle_id FROM cards WHERE carddb_casefold(name) = ? "
+            "UNION SELECT oracle_id FROM faces "
+            "WHERE carddb_casefold(name) = ?",
+            (folded_name, folded_name),
+        ))
 
     def all_ids(self) -> frozenset[str]:
         return frozenset(row["oracle_id"] for row in self._rows("SELECT oracle_id FROM cards"))
@@ -281,7 +308,9 @@ class SQLiteStore:
                    description=tag["description"], aliases=aliases,
                    parents=parents, children=children)
 
-    def index_store(self) -> IndexStore:
+    def index_store(
+        self, *, valid_ids: Callable[[], Iterable[str]] | None = None
+    ) -> IndexStore:
         """Wire SQLite table scans into the existing category-lazy index engine.
 
         Compound set-rarity-game and format-status keys remain coupled.
@@ -370,4 +399,4 @@ class SQLiteStore:
                 "JOIN sets AS s ON s.set_id = csr.set_id",
                 ("code", "rarity", "game"),
             ),
-        }, valid_ids=self.all_ids())
+        }, valid_ids=self.all_ids if valid_ids is None else valid_ids)

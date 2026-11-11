@@ -450,3 +450,137 @@ def test_open_missing_database_suggests_initialization(
     assert isinstance(exc_info.value, FileNotFoundError)
     assert "init" in str(exc_info.value)
     assert not target.exists()
+
+
+def test_cold_name_lookup_and_resolution_do_not_load_universe_or_indexes(db_path):
+    with CardDatabase.open(db_path, warn_if_stale=False) as db:
+        assert db._ids is None
+        assert not db._indexes.is_loaded("name")
+        assert db.by_name("aRmEd") == frozenset({"a"})
+        assert db.by_name("Dangerous") == frozenset({"a"})
+        assert db.by_name("missing") == frozenset()
+        assert db.get("a").name == "Armed // Dangerous"
+        assert db.get("missing") is None
+        assert [card.name for card in db.resolve(db.by_name("armed"))] == [
+            "Armed // Dangerous",
+        ]
+        assert "a" in db
+        assert "missing" not in db
+        assert len(db) == 7
+        assert db._ids is None
+        assert not db._indexes.is_loaded("name")
+
+        # Batch users can still choose the old cached category-wide search.
+        before = db.by_name("Dangerous")
+        db.preload_names()
+        assert db._indexes.is_loaded("name")
+        assert db.by_name("Dangerous") == before
+        assert db.by_name("missing") == frozenset()
+        assert db._ids is not None
+
+
+def test_fast_name_lookup_matches_full_unicode_casefold(db_path):
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "INSERT INTO cards VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("unicode", "Straße", "normal", "Creature", 1, 0, 0, None, 0, None),
+        )
+        connection.execute(
+            "INSERT INTO faces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("unicode", 0, "Éowyn", "Creature", None, None, None, None,
+             None, None, None, None, None, None),
+        )
+
+    with CardDatabase.open(db_path, warn_if_stale=False) as db:
+        fast = [db.by_name(name) for name in ("STRASSE", "éOWYN", "straße")]
+        assert fast == [frozenset({"unicode"})] * 3
+        assert not db._indexes.is_loaded("name")
+        db.preload_names()
+        assert [db.by_name(name) for name in ("STRASSE", "éOWYN", "straße")] == fast
+
+
+def test_preload_names_is_unavailable_after_close(db_path):
+    db = CardDatabase.open(db_path, warn_if_stale=False)
+    db.close()
+    with pytest.raises(DatabaseClosedError):
+        db.preload_names()
+
+
+def test_name_lookup_cache_reuses_casefolded_hits_and_misses(db_path, monkeypatch):
+    with CardDatabase.open(db_path, warn_if_stale=False) as db:
+        lookups = []
+        direct_lookup = db._store.ids_by_name
+
+        def counted_lookup(key):
+            lookups.append(key)
+            return direct_lookup(key)
+
+        monkeypatch.setattr(db._store, "ids_by_name", counted_lookup)
+        assert db.by_name("Armed") == frozenset({"a"})
+        assert db.by_name("aRMED") == frozenset({"a"})
+        assert db.by_name("missing-name") == frozenset()
+        assert db.by_name("MISSING-NAME") == frozenset()
+        assert lookups == ["armed", "missing-name"]
+        assert len(db._name_cache) == 2
+        assert db._ids is None
+        assert not db._indexes.is_loaded("name")
+
+
+def test_name_lookup_cache_evicts_least_recent_entry(db_path, monkeypatch):
+    from mtg_carddb.database import _NAME_CACHE_CAPACITY
+
+    with CardDatabase.open(db_path, warn_if_stale=False) as db:
+        lookups = []
+        direct_lookup = db._store.ids_by_name
+
+        def counted_lookup(key):
+            lookups.append(key)
+            return direct_lookup(key)
+
+        monkeypatch.setattr(db._store, "ids_by_name", counted_lookup)
+        assert db.by_name("Armed") == frozenset({"a"})
+        for number in range(_NAME_CACHE_CAPACITY - 1):
+            assert db.by_name(f"cache-miss-{number}") == frozenset()
+        assert len(db._name_cache) == _NAME_CACHE_CAPACITY
+
+        # Refresh the oldest entry so the oldest miss is evicted instead.
+        assert db.by_name("ARMED") == frozenset({"a"})
+        db.by_name("one-more-miss")
+        assert len(db._name_cache) == _NAME_CACHE_CAPACITY
+        assert "armed" in db._name_cache
+        assert "cache-miss-0" not in db._name_cache
+        assert db.by_name("armed") == frozenset({"a"})
+        assert lookups.count("armed") == 1
+
+        db.by_name("cache-miss-0")
+        assert lookups.count("cache-miss-0") == 2
+        assert len(db._name_cache) == _NAME_CACHE_CAPACITY
+
+
+def test_preloading_names_supersedes_small_cache(db_path, monkeypatch):
+    with CardDatabase.open(db_path, warn_if_stale=False) as db:
+        assert db.by_name("Dangerous") == frozenset({"a"})
+        assert db.by_name("missing") == frozenset()
+        assert len(db._name_cache) == 2
+
+        db.preload_names()
+        assert not db._name_cache
+        assert db._indexes.is_loaded("name")
+
+        def cannot_use_direct_lookup(key):
+            raise AssertionError("preloaded names must not scan SQLite")
+
+        monkeypatch.setattr(db._store, "ids_by_name", cannot_use_direct_lookup)
+        assert db.by_name("DANGEROUS") == frozenset({"a"})
+        assert db.by_name("MISSING") == frozenset()
+        assert not db._name_cache
+
+
+def test_name_cache_is_per_database_handle(db_path):
+    with CardDatabase.open(db_path, warn_if_stale=False) as first:
+        assert first.by_name("Armed") == frozenset({"a"})
+
+    with CardDatabase.open(db_path, warn_if_stale=False) as second:
+        assert not second._name_cache
+        assert second.by_name("Armed") == frozenset({"a"})
+        assert len(second._name_cache) == 1

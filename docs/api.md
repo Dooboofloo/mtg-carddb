@@ -1,6 +1,6 @@
 # MTG CardDB — Python API Contract
 
-**Status:** Stable public Python API — `mtg-carddb` 1.0.0.\
+**Status:** Stable public Python API — `mtg-carddb` 1.1.0.\
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
 **Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).
@@ -173,11 +173,23 @@ All methods in this section return an actual `frozenset[str]` of **Oracle IDs** 
 | Method | Semantics |
 | --- | --- |
 | `all_cards() -> frozenset[str]` | Every stored Oracle identity |
-| `by_name(name: str) -> frozenset[str]` | Exact, case-insensitive match against the whole-card name **or any face name**; not substring/fuzzy matching |
+| `by_name(name: str) -> frozenset[str]` | Exact Unicode case-insensitive match against the whole-card name **or any face name**; not substring/fuzzy matching |
+| `preload_names() -> None` | Explicitly hydrate the complete in-memory name index for repeated searches across many distinct names |
 | `by_layout(layout: str) -> frozenset[str]` | Matching Scryfall card layout; case-insensitive canonical-value comparison |
 | `game_changers() -> frozenset[str]` | Oracle IDs explicitly classified `game_changer=True` by Scryfall in this build; missing and `False` are excluded. |
 
 A complete multifaced card and each of its individual face names can match `by_name()`, always returning the **parent Oracle ID**. Distinct Oracle identities with a matching name may all be returned. Unknown ordinary name or layout values return empty results, not guessed matches.
+
+**Name-lookup performance in v1.1:** Opening a database and looking up a single
+name does not hydrate the full Oracle-ID universe or the complete name index.
+Until `preload_names()` is called, a new case-folded name is searched directly
+in SQLite. A bounded per-handle least-recently-used cache holds up to **256
+recent name results**, including empty results. Repeated case variants reuse
+the same entry. For workloads with many distinct names, `preload_names()`
+populates the complete name index once, clears the small cache, and serves
+subsequent name queries from the in-memory index. Existing SQLite schema-v1
+databases require no migration or rebuild. Cache capacity, timing, and eviction
+are implementation details, not stable API promises.
 
 ### 4.2 Color identity
 
@@ -356,7 +368,7 @@ The package exposes a small, documented exception hierarchy for domain-specific 
 The public semantics above remain stable even if the implementation later changes its indexing technique.
 
 - **Baseline representation:** Canonical Oracle UUID strings, with memberships constructed as temporary `set[str]` and published as `frozenset[str]`. No custom public result type.
-- **Baseline hydration:** Lazily load an entire attribute category upon first use. Loading is atomic to the index store: no partial category is exposed after failure. Large categories may use more selective hydration if benchmarks justify it.
+- **Index hydration:** Most indexed attributes lazily hydrate a category on first use. Exact-name queries instead use direct SQLite access and a small bounded cache unless the caller explicitly invokes `preload_names()`. Category loading remains atomic: no partially loaded category is exposed after failure.
 - **Base indexes:** Map individual or **compound** attribute keys to immutable memberships. Base memberships represent persisted facts, never independently invented classifications.
 - **Derived results:** Color-identity subsets/supersets, aggregate-color memberships and comparisons, numeric ranges, tag descendants, and historical projections may be computed and cached. Their cache entries are separate from direct base memberships.
 - **Tag specialization:** Preserve direct taggings and directed edges; cache descendants and expanded members independently; do not duplicate ancestor taggings in SQLite.
@@ -464,7 +476,7 @@ Applications remain free to create their own sets and combine them with CardDB's
 
 ## 11. Compatibility boundary
 
-This document describes the stable **1.0 library-facing API** over SQLite schema version 1. Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
+This document describes the stable **1.x library-facing API** (including the additive v1.1 name-preloading method) over SQLite schema version 1. Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
 
 The following are **not** public compatibility commitments: SQLite query plans, internal bit allocations, memory/index layout, hydration timing, cache hit behavior, caching object identity, and module boundaries of the internal implementation. Database schema compatibility is governed separately by the frozen `schema.md` and SQLite's `user_version`.
 

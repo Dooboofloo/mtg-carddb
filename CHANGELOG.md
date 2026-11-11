@@ -8,6 +8,32 @@ The project follows a `MAJOR.MINOR.PATCH` version scheme. Releases below 1.0.0 m
 
 No changes recorded yet.
 
+## 1.1.0 — Fast individual-name lookups
+
+### Added
+
+- `CardDatabase.preload_names()` for explicitly hydrating the complete name
+  index when making many distinct name queries.
+- A bounded per-database-handle, least-recently-used cache for the 256 most
+  recent case-insensitive name lookups, including unsuccessful searches.
+
+### Improved
+
+- Database opening no longer eagerly materializes the complete Oracle-ID
+  universe; one-off exact-name searches query SQLite directly without loading
+  unrelated indexes.
+- Direct Oracle-ID retrieval, resolution, membership, and database length can
+  operate without constructing the complete in-memory ID universe.
+- Repeat queries of a cached name avoid the previous per-query SQLite scan;
+  explicit preloading retains indexed performance for batches of distinct names.
+- README, getting-started guide, API reference, roadmap, and release guidance
+  updated for v1.1.0.
+
+### Compatibility
+
+- No breaking public API changes, no new runtime dependencies, and no SQLite
+  schema migration or database rebuild required (schema v1).
+
 ## 1.0.0 — Stable public API
 
 ### Changed

@@ -20,14 +20,27 @@ The **SQLite schema version** is separate from the package version. The reader d
 
 Version 1.0 is not a claim of bug-free software or exhaustive validation. It does not imply a printing inventory, historical Oracle-text or ban-list archive, or deckbuilding rules engine.
 
-## Possible work after 1.0
+## v1.1.0: fast individual-name retrieval
+
+Version 1.1.0 makes `CardDatabase.open()` and single-card name lookups practical
+without building the complete in-memory name index or Oracle-ID universe.
+Exact names, including individual face names, are matched case-insensitively;
+result sets and all existing query semantics are unchanged. A bounded
+per-handle cache accelerates repeated searches of the same name, while the
+additive `preload_names()` method preserves the full indexed path for batches
+of distinct names. Existing schema-v1 snapshots remain compatible.
+
+This is a backward-compatible minor release, with no changes to the data
+source pipeline, storage schema, or required runtime dependencies.
+
+## Possible work after 1.1
 
 These are candidates, not prerequisites or a fixed release schedule.
 
 | Area | Potential direction |
 | --- | --- |
 | Downstream adoption | Use the published package in the original Commander generator; improve integration pain points through backward-compatible APIs |
-| Query correctness and performance | Targeted regression fixtures, equivalence checks, and benchmarks when motivated by real issues |
+| Query correctness and performance | Additional targeted regression fixtures, performance benchmarks, and (if needed) persisted name-index optimization for many uncached distinct names |
 | Reproducible datasets | Optional source-export retention and deterministic rebuild manifests |
 | Additional data | Printing-specific records, related-card links, and narrowly scoped query predicates |
 | Extensions | Historical-format tooling, custom classifications, and other applications outside the core |

@@ -182,3 +182,27 @@ def test_original_loader_mapping_cannot_change_store_categories():
     index = IndexStore(loaders)
     loaders["type"] = lambda: [("Creature", "b")]
     assert index.get("type", "Creature") == frozenset({"a"})
+
+
+def test_callable_validation_universe_is_lazy_and_cached():
+    calls = 0
+
+    def universe():
+        nonlocal calls
+        calls += 1
+        return {"a", "b"}
+
+    index = IndexStore(
+        {"name": lambda: [("Alpha", "a")],
+         "type": lambda: [("Creature", "b")]},
+        valid_ids=universe,
+    )
+    assert not index.is_loaded("name")
+    assert calls == 0
+    index.preload("name")
+    assert index.is_loaded("name")
+    assert index.get("name", "Alpha") == frozenset({"a"})
+    assert index.get("type", "Creature") == frozenset({"b"})
+    assert calls == 1
+    with pytest.raises(KeyError, match="unknown index category"):
+        index.is_loaded("unknown")

@@ -1,6 +1,6 @@
 # MTG CardDB — Database Schema
 
-**Status:** Implemented SQLite schema v1 — package 1.0.0.\
+**Status:** Implemented SQLite schema v1 — package 1.1.0 (schema unchanged since 1.0.0).\
 **Compatibility:** [`roadmap.md`](roadmap.md) (schema and Python package versions are independent).
 **Database file:** `carddb.sqlite`  
 **Canonical data source:** Scryfall  
