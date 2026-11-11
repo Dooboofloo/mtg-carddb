@@ -1,7 +1,7 @@
 # MTG CardDB
 
 [![PyPI version](https://img.shields.io/pypi/v/mtg-carddb)](https://pypi.org/project/mtg-carddb/)
-[![Python versions](https://img.shields.io/pypi/pyversions/mtg-carddb)](https://pypi.org/project/mtg-carddb/)
+[![Python requirement](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2FDooboofloo%2Fmtg-carddb%2Fmain%2Fpyproject.toml)](https://pypi.org/project/mtg-carddb/)
 [![CI](https://github.com/Dooboofloo/mtg-carddb/actions/workflows/ci.yml/badge.svg)](https://github.com/Dooboofloo/mtg-carddb/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Dooboofloo/mtg-carddb/blob/main/LICENSE)
 
@@ -99,7 +99,7 @@ CardDB is a mechanical card-data library, **not** a rules engine, full collectio
 - [Roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) — short path to 1.0 and possible follow-on work
 - [Contributing](https://github.com/Dooboofloo/mtg-carddb/blob/main/CONTRIBUTING.md) · [Changelog](https://github.com/Dooboofloo/mtg-carddb/blob/main/CHANGELOG.md) · [Release guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/releasing.md)
 
-The project's **next intended major milestone is v1.0.0**: stabilize the existing public interface, complete the normal release checks, and publish. Additional features and deeper validation can follow in later releases. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for the scope and compatibility policy.
+**Version 1.0.0** establishes the stable public Python API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
 
 ## Development
 

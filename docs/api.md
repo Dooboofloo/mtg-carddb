@@ -1,10 +1,10 @@
 # MTG CardDB — Python API Contract
 
-**Status:** Implemented API reference — `mtg-carddb` 0.1.x (pre-1.0; subject to compatible refinements)\
+**Status:** Stable public Python API — `mtg-carddb` 1.0.0.\
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
 **Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).
-**Release plan:** [`roadmap.md`](roadmap.md) (the existing API is the intended foundation for v1.0).
+**Future work:** [`roadmap.md`](roadmap.md) (compatibility policy and possible additions).
 
 ## 1. Purpose and design boundaries
 
@@ -84,7 +84,7 @@ These records are retrieved **separately**, rather than included in every `Card`
 | `DatabaseInfo` | `schema_version: int`, `created_at: str`, `builder_version: str`, `sources: tuple[SourceInfo, ...]` | Read-only database build information |
 | `SourceInfo` | `source_type: str`, `source_updated_at: str \| None`, `downloaded_at: str`, `source_url: str`, `sha256: str`, `record_count: int` | Provenance for a particular Scryfall input |
 
-The listed field names describe the implemented 0.1.x public record types. Internal database UUIDs for tags and sets may be used by the engine but are not required to operate the public API. The metadata structures contain immutable values and immutable nested collections.
+The listed field names describe the stable 1.0 public record types. Internal database UUIDs for tags and sets may be used by the engine but are not required to operate the public API. The metadata structures contain immutable values and immutable nested collections.
 
 **Ordering:** Direct `Card.faces` preserves face order. Every returned tuple of records has deterministic ordering; related legality records sort by `(format, status)`, set-rarity records by `(set_code, rarity, game)`, taggings by `tag_slug`, and source metadata by `source_type`. No meaningful iteration order is promised for `frozenset` results.
 
@@ -464,7 +464,7 @@ Applications remain free to create their own sets and combine them with CardDB's
 
 ## 11. Compatibility boundary
 
-This document describes the implemented **0.1.x library-facing API** over SQLite schema version 1. Before a public `1.0.0`, names and signatures may be deliberately refined; after a stable API commitment, changes to method names, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting.
+This document describes the stable **1.0 library-facing API** over SQLite schema version 1. Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
 
 The following are **not** public compatibility commitments: SQLite query plans, internal bit allocations, memory/index layout, hydration timing, cache hit behavior, caching object identity, and module boundaries of the internal implementation. Database schema compatibility is governed separately by the frozen `schema.md` and SQLite's `user_version`.
 

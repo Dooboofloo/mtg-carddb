@@ -8,6 +8,19 @@ The project follows a `MAJOR.MINOR.PATCH` version scheme. Releases below 1.0.0 m
 
 No changes recorded yet.
 
+## 1.0.0 — Stable public API
+
+### Changed
+
+- Declare the existing documented Python API stable under a 1.x compatibility policy.
+- Add Python-version Trove classifiers for the tested 3.11, 3.12, and 3.13 versions, and make the README Python badge read the requirement directly from `pyproject.toml`.
+- Update the README, API/schema references, roadmap, and release guidance for the stable release.
+
+### Unchanged
+
+- No changes to the core query behavior, SQLite schema v1, source ingestion, or database lifecycle.
+- Existing scope and source-provenance limitations remain; see the README and API/schema documentation.
+
 ## 0.1.0 — First public release
 
 ### Added

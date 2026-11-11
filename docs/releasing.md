@@ -1,6 +1,6 @@
 # Releasing MTG CardDB
 
-MTG CardDB is published on [PyPI](https://pypi.org/project/mtg-carddb/). The first public release was `0.1.0`; **`1.0.0` is the next intended feature release**. Releases are prepared and published by the maintainer, not automatically on every push.
+MTG CardDB is published on [PyPI](https://pypi.org/project/mtg-carddb/). The first public release was `0.1.0`; `1.0.0` establishes the stable public Python API. Releases are prepared and published by the maintainer, not automatically on every push.
 
 The Python package version and SQLite schema version are independent. The initial release uses SQLite schema version 1. Consult [the schema specification](schema.md) and the storage reader before changing that version.
 
@@ -8,7 +8,7 @@ The Python package version and SQLite schema version are independent. The initia
 
 For an ordinary release:
 
-1. Review the changes, user-facing documentation, changelog, and version in `pyproject.toml`.
+1. Before publishing, review changes and update any affected README, API, schema, changelog, and release notes; intermediate commits do not each require documentation edits. Verify the version in `pyproject.toml`.
 2. Run the existing offline tests. Confirm the release commit passes CI.
 3. Build and validate the wheel and source distribution, and verify a clean installation. CI already exercises both distribution formats.
 4. Ensure the tag points to the verified release commit, then publish the GitHub release and authorize the separate PyPI workflow.
@@ -70,7 +70,7 @@ At [GitHub Releases](https://github.com/Dooboofloo/mtg-carddb/releases):
 
 1. Draft a release from the verified tag.
 2. Use the changelog to describe important changes and known limitations.
-3. Use **pre-release** only when you intend that release to be a preview; the planned v1.0.0 release is intended as a normal stable release.
+3. Use **pre-release** only for preview versions; v1.0.0 is intended as a normal stable release.
 4. Attach the wheel and source distribution if desired, review the notes, and publish.
 
 GitHub release assets are separate from the PyPI publication workflow, which rebuilds from the selected Git tag.

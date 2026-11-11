@@ -28,7 +28,7 @@ The ordinary test suite must not depend on the availability of Scryfall or any o
 - Run the complete offline test suite.
 - Keep imports and database queries free of implicit network requests.
 - Check Windows, Linux, and macOS considerations, especially filesystem replacement, locks, path handling, and timestamps.
-- Update documentation when public behavior changes.
+- Before a release, review and update documentation affected by public behavior changes; not every intermediate technical commit needs a docs change.
 - Do not commit generated SQLite databases, downloaded Scryfall exports, local credentials, virtual environments, or build artifacts.
 
 GitHub Actions tests the supported Python versions on all three operating systems and verifies wheel and source-distribution builds.
@@ -45,7 +45,7 @@ The persisted schema is documented in [docs/schema.md](docs/schema.md).
 
 Do not change the SQL schema silently. A schema change requires coordinated changes to its documentation, builder, reader compatibility checks, tests, and SQLite schema version policy.
 
-The library is preparing for a stable 1.0 API. Existing public names and query meanings should only be changed deliberately. After 1.0, prefer backward-compatible additions in minor releases and reserve intentionally incompatible public API changes for a major release; the SQLite schema retains its own compatibility/versioning policy.
+Version 1.0 establishes the documented public Python API as stable. Prefer backward-compatible additions in minor releases and reserve intentionally incompatible public API changes for a major release; the SQLite schema retains its own compatibility/versioning policy.
 
 ## Scryfall import changes
 
@@ -67,6 +67,6 @@ For security-sensitive reports, avoid posting exploit details publicly before th
 
 ## Releases
 
-See the [roadmap](docs/roadmap.md) for the short path to 1.0 and [release guide](docs/releasing.md) for the maintainer-controlled GitHub and PyPI workflow. CI and targeted regression checks are the normal quality baseline; exhaustive audits and benchmark gates are not prerequisites for routine releases.
+See the [roadmap](docs/roadmap.md) for post-1.0 directions and [release guide](docs/releasing.md) for the maintainer-controlled GitHub and PyPI workflow. CI and targeted regression checks are the normal quality baseline; exhaustive audits and benchmark gates are not prerequisites for routine releases.
 
 The project is licensed under the [MIT License](LICENSE). Card data supplied by Scryfall is subject to its own terms and attribution requirements.
