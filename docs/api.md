@@ -1,9 +1,9 @@
 # MTG CardDB — Python API Contract
 
-**Status:** v1 design contract (no implementation yet)  
+**Status:** Implemented API reference — `mtg-carddb` 0.1.x (pre-1.0; subject to compatible refinements)\
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
-**Companion specification:** [`schema.md`](schema.md) (agreed SQLite schema v1, including the approved nullable `cards.game_changer` column).
+**Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).
 
 ## 1. Purpose and design boundaries
 
@@ -23,7 +23,7 @@ The public contract is designed for applications that need to select, compare, c
 
 ## 2. Public object model
 
-All record classes are **deeply immutable**, suitable for holding after the database has closed. The intended implementation technique is frozen, slotted dataclasses, but the semantic contract is their fields, values, and immutability—not the decorator used.
+All record classes are **deeply immutable**, suitable for holding after the database has closed. The implementation uses frozen, slotted dataclasses, but the semantic contract is their fields, values, and immutability—not the decorator used.
 
 ### 2.1 `Card`
 
@@ -83,7 +83,7 @@ These records are retrieved **separately**, rather than included in every `Card`
 | `DatabaseInfo` | `schema_version: int`, `created_at: str`, `builder_version: str`, `sources: tuple[SourceInfo, ...]` | Read-only database build information |
 | `SourceInfo` | `source_type: str`, `source_updated_at: str \| None`, `downloaded_at: str`, `source_url: str`, `sha256: str`, `record_count: int` | Provenance for a particular Scryfall input |
 
-The listed field names are the proposed v1 Python contract. Internal database UUIDs for tags and sets may be used by the engine but are not required to operate the public API. The metadata structures contain immutable values and immutable nested collections.
+The listed field names describe the implemented 0.1.x public record types. Internal database UUIDs for tags and sets may be used by the engine but are not required to operate the public API. The metadata structures contain immutable values and immutable nested collections.
 
 **Ordering:** Direct `Card.faces` preserves face order. Every returned tuple of records has deterministic ordering; related legality records sort by `(format, status)`, set-rarity records by `(set_code, rarity, game)`, taggings by `tag_slug`, and source metadata by `source_type`. No meaningful iteration order is promised for `frozenset` results.
 
@@ -91,7 +91,7 @@ The listed field names are the proposed v1 Python contract. Internal database UU
 
 | Interface | Public contract |
 | --- | --- |
-| `CardDatabase.open(path: str \| Path \| None = None) -> CardDatabase` | Open an existing compatible SQLite database, read-only. `None` resolves the package-managed default database path. No network access or automatic rebuild. |
+| `CardDatabase.open(path: str \| Path \| None = None, *, warn_if_stale: bool = True, stale_after_days: float = 7.0) -> CardDatabase` | Open an existing compatible SQLite database, read-only. `None` resolves the per-user default path. Emits nonfatal stale/unknown-source warnings by default; never downloads or updates. |
 | `db.close() -> None` | Close the handle; repeated closure is harmless. |
 | `with CardDatabase.open(...) as db:` | Context manager closes the handle on exit, including exceptional exit. |
 | `db[oracle_id: str] -> Card` | Strict lookup by Oracle UUID; missing key raises `KeyError`. |
@@ -108,6 +108,54 @@ The listed field names are the proposed v1 Python contract. Internal database UU
 **Dataset stability:** An opened `CardDatabase` uses one fixed dataset. A separately invoked update builds and validates a temporary SQLite database before replacing `carddb.sqlite` if safe; readers must close and reopen to obtain new data. On platforms where open handles prevent replacement, the updater fails safely rather than corrupting the file. No live refresh of an existing object.
 
 **Concurrency:** Thread-sharing guarantees are **not** part of v1; separate handles should be used when necessary. Caches and SQL connections are private implementation details.
+
+### 3.1 Explicit initialization, update, and default path
+
+`default_database_path() -> Path` returns the current per-user default path without creating files. On Windows it uses `%LOCALAPPDATA%` (falling back to `~/AppData/Local`); on other systems it uses `$XDG_DATA_HOME` (falling back to `~/.local/share`).
+
+The CLI creates the default parent directory during `init`. Direct library callers must ensure the destination directory exists.
+
+Both lifecycle functions are exported from `mtg_carddb`:
+
+| Function | Behavior |
+| --- | --- |
+| `initialize_database(target_path: str \| Path, *, on_progress: ProgressCallback \| None = None) -> DatabaseWorkflowResult` | Acquire Scryfall sources, build a validated snapshot, and install a new database. Refuses to overwrite an existing destination. |
+| `update_database(target_path: str \| Path, *, on_progress: ProgressCallback \| None = None) -> DatabaseWorkflowResult` | Requires an existing, readable, compatible CardDB database. Builds and validates a replacement before guarded activation. |
+
+`DatabaseWorkflowResult` contains `operation` (`"init"` or `"update"`), `path: Path`, and `build: SnapshotBuildResult`, which contains import counts and the output path.
+
+The optional callback receives immutable `WorkflowProgress(stage, status, detail)` events.
+
+Stages are `bulk`, `references`, `build`, and `activation`. Each stage reports `start` and `complete`. Ordinary callback exceptions are logged and further notifications disabled; a failed progress observer does not turn an otherwise successful operation into a reported failure.
+
+Initialization and updating require network access. Opening and querying an existing database do not.
+
+Cooperating workflows use owner-diagnostic lock files. Updates verify that the existing file is compatible and check for external changes before activation. The fingerprint guard narrows the possibility of overwriting an externally modified file, but portable filesystem APIs do not provide a fully atomic compare-and-replace operation.
+
+Locks are never automatically deleted merely because they appear old.
+
+### 3.2 Source freshness
+
+`database_freshness(info: DatabaseInfo, *, stale_after_days: float = DEFAULT_STALE_AFTER_DAYS, now: datetime | None = None) -> DatabaseFreshness`
+
+This function evaluates the timestamps of both required bulk sources: `default_cards` and `oracle_tags`.
+
+The immutable `DatabaseFreshness` result has these fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `status` | `"current" \| "stale" \| "unknown"` | Overall freshness classification |
+| `source_updated_at` | `datetime \| None` | Timestamp of the oldest required source, when known |
+| `age` | `timedelta \| None` | Age of that source |
+| `source_type` | `str \| None` | Identifier of the oldest required source, when known |
+
+The default freshness threshold is seven days. Missing, invalid, or implausibly future-dated required timestamps yield `unknown`.
+
+`CardDatabase.open()` normally logs a nonfatal warning for stale or unknown freshness. `warn_if_stale=False` suppresses that warning; `stale_after_days` changes the threshold. Neither option modifies the database or contacts Scryfall.
+
+`db.info().sources` provides the individual provenance records.
+
+The CLI also exposes `mtg-carddb info` and the read-only `mtg-carddb locks` command. See the README for command options.
 
 ## 4. Common card-query contract
 
@@ -292,7 +340,13 @@ Catalog values are useful for autocomplete, validation, and discoverability. The
 | Invalid WUBRGC color-set notation, match mode, status, rarity, game, or numeric range | `ValueError` |
 | Wrong Python argument type | `TypeError` |
 | Attempt to use a closed database | `DatabaseClosedError` |
-| Missing, malformed, or incompatible SQLite file on open | Informative open/compatibility error; never silently rebuild or download |
+| Database file missing on open | `DatabaseNotInitializedError` (also a `DatabaseOpenError` and `FileNotFoundError`), with initialization instructions |
+| Invalid/unreadable database on open | `DatabaseOpenError` or `DatabaseCompatibilityError`, a subclass of `DatabaseOpenError` |
+| Unsafe lifecycle target, existing lock, or invalid update target | `DatabaseWorkflowError`, `FileExistsError`, or `FileNotFoundError`, depending on cause |
+| Invalid snapshot activation | `SnapshotActivationError` |
+| Invalid snapshot build | `SnapshotBuildError` |
+| Source acquisition/archive failure | `BulkAcquisitionError` or `ReferenceArchiveError` |
+| Stale or unknown freshness | Nonfatal warning by default; no automatic update |
 
 The package exposes a small, documented exception hierarchy for domain-specific failures; familiar Python errors retain their standard roles. In particular, unknown ordinary type/keyword/name/layout values yield empty sets, while names identifying required catalog entities (a tag, format, or set in a specialized query) fail loudly when unknown.
 
@@ -314,7 +368,7 @@ A cached set handed to a caller remains stable even if the internal cache later 
 
 ## 8. Contract acceptance tests and benchmarks
 
-The API must be verified independently of network ingestion using synthetic, normalized fixtures, and then against representative real Scryfall records after the importer exists.
+The implemented API is exercised by offline synthetic fixtures and has passed end-to-end real Scryfall imports. The following remain regression requirements for future changes, not a claim that every independent differential or live-API comparison has already been automated.
 
 ### Behavioral tests
 
@@ -348,7 +402,7 @@ A record in `default_cards` describes a *printing*, not necessarily the canonica
 
 1. For an ordinary record with a root `oracle_id`, produce one candidate from its root card-level fields, plus one or more face rows from `card_faces` or a normalized single face from root-level face properties.
 2. For a `reversible_card` record, produce **one candidate for each face's own `oracle_id`**, using that face's own name, layout, type line, mana value, Oracle text, and other side-local facts. The root's `name` is the physical combination of the two sides; it is **not** the canonical name for either Oracle identity. Do **not** distribute the combined root `color_identity`, `keywords`, or `reserved` flag to both identities.
-3. Independently of canonical candidate selection, extract `(oracle_id, set_id, rarity, game)` observations from **every** relevant printing and from both independent reversible sides. No representative's set, rarity, or games can stand in for the aggregate history.
+3. Independently of canonical candidate selection, extract `(oracle_id, set_id, rarity, game)` observations from **every non-`art_series`** printing and from both independent reversible sides. No representative's set, rarity, or games can stand in for the aggregate history.
 4. Normalize missing versus known-empty fields, preserve face order and original Oracle text, and validate that the candidate can be represented by `cards`, `faces`, `face_types`, `card_keywords`, and `card_legalities` without inventing values.
 
 The public `Card` has **one selected normalized face arrangement**, not an inventory of printing layouts. A card printed in both `normal` and `reversible_card` form may expose `Card.layout == "normal"` even though a reversible printing also exists. This is intentional and means that `by_layout()` queries the representative *card model*, not historical print formats.
@@ -371,9 +425,9 @@ Select **one coherent candidate** per Oracle ID, not an arbitrary first record a
 3. Compare the legality maps reported by the **highest-eligibility candidate group**. If they agree, persist that exact Scryfall status per format. Log differences found in lower-priority (e.g. gold-bordered) candidates without treating them as disagreements in canonical Oracle text. If equally eligible ordinary candidates disagree, **strict import fails with diagnostics** rather than silently choosing whichever printing happened to be last.
 4. If no ordinary candidate exists, preserve the status supplied by the best available source candidate and report that its source is nonstandard; do not fabricate a format legality from rules text or from the legality of a different Oracle identity.
 
-This requires **no change to the 13-table schema**, since `card_legalities` already stands apart from `cards`. However, the frozen `schema.md` §2.1 currently describes the normalized gameplay projection as including legalities; before implementing ingestion, its explanatory validation wording should be clarified to distinguish these two projections. This is a documentation-alignment task, **not** permission to alter its SQL tables or the user-facing set queries.
+The implementation separates mechanical representative selection from legality selection, storing legality facts in `card_legalities`. No additional table is needed beyond the implemented 13-table schema. These selections must remain distinct when reviewing future ingestion changes.
 
-**Scope of validation:** The above is the required normalization *contract*, supported by Scryfall's layout model and independent audits of `default_cards`, **not** a claim that the current complete bulk export was downloaded and exhaustively checked for this document. A full-export integration run remains a release gate.
+**Scope of validation:** The importer has passed full-export builds and representative-selection audits during development. Future Scryfall exports must continue to be validated; independent spot-checks against live Card/Set API responses should be tracked separately rather than assumed from a successful build.
 
 ### 9.3 Audit of mechanically relevant Scryfall fields
 
@@ -409,8 +463,7 @@ Applications remain free to create their own sets and combine them with CardDB's
 
 ## 11. Compatibility boundary
 
-This document defines the intended v1 **library-facing** behavior. Before public `1.0.0`, names/signatures may be corrected through deliberate design review; once published as stable, changes to method names, return types, record fields, search meaning, error categories, or the meaning of absence are compatibility-affecting changes.
+This document describes the implemented **0.1.x library-facing API** over SQLite schema version 1. Before a public `1.0.0`, names and signatures may be deliberately refined; after a stable API commitment, changes to method names, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting.
 
 The following are **not** public compatibility commitments: SQLite query plans, internal bit allocations, memory/index layout, hydration timing, cache hit behavior, caching object identity, and module boundaries of the internal implementation. Database schema compatibility is governed separately by the frozen `schema.md` and SQLite's `user_version`.
 
-**Implementation gate:** Implement and test the pure-Python set/index engine against synthetic fixtures first. Integrate SQLite and Scryfall ingestion later, without changing this contract merely to fit a particular storage query shape. Before freezing the importer, reconcile the legality anomaly described in §9.2 with `schema.md` validation wording, and verify that the implemented nullable `cards.game_changer` column and API behave consistently. Do not add Attraction-pattern or `all_parts` persistence without a new scope decision.

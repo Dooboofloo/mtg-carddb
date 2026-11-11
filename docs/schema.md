@@ -1,6 +1,6 @@
 # MTG CardDB — Database Schema
 
-**Status:** Design specification (proposed schema v1; not yet implemented)  
+**Status:** Implemented SQLite schema v1 — package 0.1.x (pre-release)\
 **Database file:** `carddb.sqlite`  
 **Canonical data source:** Scryfall  
 **Primary consumer:** Python applications using composable set operations
@@ -14,7 +14,7 @@ MTG CardDB is a local-first Python library for accessing *Magic: The Gathering* 
 - The unit of query identity is a **Scryfall Oracle ID**. Queries return immutable sets of Oracle IDs (`frozenset[str]`).
 - The database describes the card universe without specific assumptions, house bans, favored formats, or other application policies.
 - **Scryfall is the only canonical data source.**
-- No individual printing records are retained. `default_cards` printings are a **transient import representation** used both to select current Oracle-level characteristics and to aggregate historical set/rarity/platform observations. CardDB never persists printing IDs or printing objects.
+- No individual printing records are retained. `default_cards` printings are a **transient import representation** used both to select current Oracle-level characteristics and to aggregate historical set/rarity/platform observations. CardDB never persists printing IDs or printing objects. Printings with `layout="art_series"` are deliberately excluded from the mechanical-card universe and historical observations.
 - Cards, faces, keywords, colors, the current Scryfall Game Changer flag, tags, legalities, and set/rarity occurrences are **stored facts**. Python indexes and descendant-expanded tag memberships are **derived views**, not duplicated SQL facts.
 - The database represents the current Oracle characteristics and current Scryfall legality statuses **at build time**. It is not an archive of historical Oracle text or historical ban lists.
 - A completed database is treated as **read-only** by consuming applications. Refreshing builds a new database and replaces the existing file only after validation.
@@ -27,29 +27,37 @@ The **sole card-record bulk source** is Scryfall's `default_cards` export; `orac
 
 | Scryfall source | Used for | Stored output |
 | --- | --- | --- |
-| `default_cards` bulk export (**required**) | Normalize one current mechanical representative **per Oracle ID**; aggregate all observed card–set–rarity–game relationships | `cards`, `faces`, `face_types`, `card_keywords`, `card_legalities`, `card_set_rarities`; **never printing rows** |
+| `default_cards` bulk export (**required**) | Normalize one current mechanical representative **per Oracle ID** and aggregate observed card–set–rarity–game relationships, excluding `art_series` printings | `cards`, `faces`, `face_types`, `card_keywords`, `card_legalities`, `card_set_rarities`; **never printing rows** |
 | `oracle_tags` bulk export (**required**) | Oracle-tag definitions, direct taggings, aliases, directed hierarchy | `tags`, `tag_aliases`, `tag_relationships`, `card_tags` |
 | Scryfall Sets API (`GET /sets`, **required**) | Set UUID, canonical code, name, type, release date, and **set-level** `digital` | `sets` |
 | Scryfall type catalogs (**import-time reference**) | Validate known supertypes and subtype vocabulary, including multiword types; detect vocabulary changes | No dedicated catalog table; provenance recorded if fetched |
 
 **Bulk transport.** Discover download URLs from Scryfall's bulk-data API, rather than hardcoding CDN filenames. Current exports expose `jsonl_download_uri` pointing to gzip-compressed JSON Lines. Stream and decompress line by line; validate the final gzip stream and record count. For possible future format changes, reject unsupported formats explicitly. Do not load the entire export in memory or issue per-card API requests for normal imports.
 
-**Source consistency.** `default_cards`, `oracle_tags`, and the Sets API/catalogs have independent update times. The resulting DB is a documented build from specific Scryfall source versions, not a claim of a globally simultaneous Scryfall snapshot. Record each actual source in `source_metadata`.
+**Resource and HTTP limits.** Compressed bulk transfers have a 1 GiB limit, decompressed JSONL exports a 4 GiB total limit, and individual decompressed records a 64 MiB limit. Acquisition verifies HTTPS response URLs, rejects oversized inputs, and retries selected transient connection/server failures with bounded backoff. HTTP 429 does not trigger automatic retries. Source ingestion remains line-oriented and validates gzip checksums on complete reads.
+
+**Source consistency.** `default_cards`, `oracle_tags`, and the Sets API/catalogs have independent update times. The resulting database combines specific Scryfall responses, not a globally simultaneous Scryfall snapshot.
+
+The standard `init`/`update` workflow verifies and records bulk-export provenance as well as captured reference-source metadata.
+
+The lower-level `build_snapshot()` API can also accept local bulk files without a bulk manifest, or caller-provided `ReferenceData` without an archived reference manifest. Such inputs do not automatically acquire source-provenance rows. Missing required bulk timestamps cause database freshness to be classified as `unknown`, not fabricated from the build time.
 
 ### 2.1 Deterministic Oracle representative selection
 
 The importer must **not** use the first printing encountered: row order is not a semantic selection policy. Instead:
 
-1. Stream `default_cards` and extract distinct `(oracle_id, set_id, rarity, game)` observations from **every** printing, including reversible face Oracle IDs. Deduplicate those observations in the staging database.
-2. For every ordinary Scryfall Card with a top-level Oracle ID, form a **current-mechanics projection** containing only persisted gameplay fields (including normalized face properties, card keywords, the nullable `game_changer` classification, and legalities). Treat an absent `game_changer` as unknown (`NULL`), not `False`. Ignore printing-specific fields such as printing `id`, `set`, `rarity`, collector number, art, and price.
+1. Stream `default_cards` and extract distinct `(oracle_id, set_id, rarity, game)` observations from **every non-`art_series`** printing, including reversible face Oracle IDs. Deduplicate those observations in the staging database.
+2. For every ordinary Scryfall Card with a top-level Oracle ID, form a **current-mechanics projection** containing only persisted gameplay fields (including normalized face properties, card keywords, the nullable `game_changer` classification). Treat an absent `game_changer` as unknown (`NULL`), not `False`. Ignore printing-specific fields such as printing `id`, `set`, `rarity`, collector number, art, and price.
 3. Normalize known layout-dependent field locations and compare projected values for the same Oracle ID. Compare actual values when present; distinguish genuinely absent data from conflicting provided data. Resolve layout-dependent absences only using a complete, supported source record, never arbitrary merging of unrelated cards.
 4. Select a reproducible representative among compatible candidates: prefer **non-reversible** objects, then `lang == 'en'`, then newest `released_at`, then lexical Scryfall printing `id` as a final tie-breaker. Reversible objects are treated as **separate face-level candidates** for each face's Oracle ID, not as combined card records. This policy does not claim to replicate Scryfall's subjective `oracle_cards` representative choice.
 5. A non-reversible candidate with a complete and valid gameplay projection wins over reversible face candidates. If the only source is a reversible face, accept it only when **all required Oracle-level fields can be resolved unambiguously** from Scryfall-provided information. Otherwise fail the strict build with the affected Oracle ID and missing fields; do not borrow combined root color identity, keywords, or reserved status from a different identity.
 6. Any **real disagreement in non-missing canonical mechanical values** across candidates is an import error requiring an explicit normalization rule or upstream investigation; it is not resolved by choosing the newest printing. Reconcile and validate cross-record completeness before finalizing.
 
+**Legality is a separate projection.** The importer selects a coherent mechanical representative for each Oracle identity while evaluating Scryfall legality maps using their own deterministic eligibility policy. Printing-specific tournament-ineligibility markers can affect selection of the legality source without changing the selected card's mechanical representation. The resulting statuses are stored in `card_legalities`; conflicting equally eligible legality maps cause strict validation failure.
+
 This handles known reversible anomalies such as an overall printing named `Blood Crypt // Blood Crypt`, where the underlying Oracle identity's name remains `Blood Crypt`. It also prevents accidentally treating two unrelated reversible sides as a single multifaced gameplay card.
 
-**Important limitation:** this is a fully specified *decision policy*, not a claim that the complete November 2026 Scryfall bulk files have been audited. The implementation must execute the fixture and full-export validation defined in §8. A new upstream shape that cannot be represented causes a clear build failure, leaving the existing `carddb.sqlite` intact.
+**Validation status:** The importer has been exercised against complete real Scryfall exports, including a full CLI rebuild after the bounded gzip and subtype-parser changes. Repeating this validation against newer Scryfall data remains a release/update check. It does not guarantee that future upstream exports cannot introduce unsupported shapes.
 
 ## 3. Identity and normalization
 
@@ -82,7 +90,7 @@ For ordinary split, Adventure, transform, and modal DFC layouts, multiple face r
 - Power, toughness, loyalty, defense, and Vanguard modifiers are strings because some values are symbolic (`*`, `X`, etc.). No automatic numeric interpretation is promised in v1.
 - Dates are ISO `YYYY-MM-DD` and timestamps are UTC ISO 8601 text. Booleans are SQLite integers restricted to `0` or `1`; `cards.game_changer` is nullable because absent Scryfall classification data must remain distinguishable from an explicit `False`.
 
-## 5. Proposed SQLite schema (v1)
+## 5. SQLite schema (v1, implemented)
 
 The following DDL defines the **logical persisted model**. The canonical card-field selection algorithm is specified in §2.1 and does not create additional printing tables. Secondary performance indexes are deliberately minimal until index-hydration benchmarks identify the actual bottlenecks. SQLite foreign-key enforcement must be enabled on every writing connection (`PRAGMA foreign_keys = ON`). The importer is responsible for higher-order invariants that simple foreign keys cannot express.
 
@@ -234,12 +242,12 @@ CREATE TABLE source_metadata (
 The importer must enforce (strict builds fail if required guarantees cannot be met):
 
 1. Every card has at least one face, with unique contiguous indices starting at 0.
-2. Every source printing is either accounted for by a normalized Oracle identity (ordinary or reversible face) or produces an explicit actionable error. No Oracle ID has conflicting supplied canonical mechanical characteristics; fields absent only because of a reversible layout are not interpreted as disagreeing values.
-3. `face_types` accurately describes parsed face `type_line` values. Parse the `—` type/subtype separator and match subtype names by **catalog-aware longest match** (for example, **Time Lord**, **Assembly-Worker**), not by whitespace splitting. Supertypes are identified via the Scryfall supertype catalog; other type tokens use a validated Magic card-type vocabulary. Unknown or ambiguous tokens are a validation error, not silently misclassified.
+2. Every non-`art_series` printing is accounted for by normalized Oracle identities (ordinary or reversible face) or produces an actionable error. `art_series` printings are excluded by policy. No Oracle ID has conflicting supplied canonical mechanical characteristics; reversible-layout missing fields are not interpreted as disagreeing values.
+3. `face_types` accurately describes parsed face `type_line` values. Parse the `—` type/subtype separator and match subtype names using **catalog-aware longest-valid segmentation**, not whitespace splitting. A longest-prefix match is preferred only when the remaining tokens can also be parsed. If that choice dead-ends, the parser considers a shorter valid match. Sequences with no complete parse are rejected. Supertypes and other card-type tokens are validated against the appropriate reference vocabularies.
 4. Every legality status belongs to the supported status vocabulary; format identifiers come from Scryfall data, **not** a hardcoded list of favorite formats. The `game_changer` field is imported as `1` for explicit `True`, `0` for explicit `False`, and `NULL` when absent; missing values must not be coerced to `False`.
 5. All tag slugs are unique and parent/child edges form an **acyclic** directed graph. Read `parent_ids` and `child_ids` (which may be missing/null/empty) as the two views of the same directed relationships; when both describe a relationship, verify their consistency. Alias collisions are **permitted in SQL**, recorded as ambiguous in Python, and never resolved by guessing. Canonical exact slugs take precedence over aliases.
 6. `oracle_tags` input is a collection of tag objects (`id`, `slug`, `label`, optional `description`, `aliases`, `parent_ids`, `child_ids`, and nested `taggings`). Oracle taggings reference `oracle_id` and contain `weight` with optional `annotation`. Preserve source-supplied weights as text; no hardcoded ordering or SQL vocabulary constraint is introduced. Validate object type and field types at import time, and reject unexpected required-field omissions with clear diagnostics.
-7. Tagging Oracle IDs and all set/rarity Oracle IDs resolve to imported cards. Dangling references fail a strict build (after a diagnostic report listing affected IDs); no silent deletion or invented replacement identities.
+7. All retained tagging Oracle IDs and set/rarity Oracle IDs resolve to imported cards. Direct taggings for Oracle IDs appearing **only** in excluded `art_series` printings are intentionally omitted. Unknown non-art-only references still fail a strict build; no replacement identities are invented.
 8. `default_cards` supplies one language-preferred object per printing and is the canonical source for the intended `(oracle_id, set_id, rarity, game)` relation. `all_cards` is **not used**: its additional language records do not represent an additional game-mechanical set/rarity category. Repeated printings, multi-game memberships, and reversible sides are deduplicated into distinct relationship rows.
 9. The new database passes SQLite integrity and foreign-key checks, plus semantic validation, **before** activation.
 
@@ -251,7 +259,7 @@ SQLite's declared primary keys and unique constraints already create internal in
 
 SQL persists normalized facts; Python builds an inverted index mapping attribute values or compound attribute keys to immutable Oracle-ID sets. The public API must never require callers to know internal bitmask integers, tag UUIDs, or SQL table names.
 
-| Python operation (proposed) | SQL source | Result semantics |
+| Implemented Python operation | SQL source | Result semantics |
 | --- | --- | --- |
 | `by_type("Creature")` | `face_types`, category `type` | Oracle IDs with **any** matching face |
 | `by_supertype("Legendary")` / `by_subtype("Elf")` | `face_types` | Any matching face |
@@ -267,7 +275,7 @@ SQL persists normalized facts; Python builds an inverted index mapping attribute
 | `game_changers()` | `cards.game_changer` | Only cards explicitly classified `True`; `False` and `NULL` excluded |
 | `resolve(oracle_ids)` | `cards`, `faces` and related tables | Full card records, retrieved by ID |
 
-These names illustrate intended semantics, not a frozen Python API. The engine may eagerly or lazily hydrate index categories; benchmark the alternatives. A repeated lookup of an already-loaded category should not require SQL. Direct and expanded tag memberships should be cached separately as needed, with duplicate paths deduplicated by set union.
+These names correspond to implemented query methods. Their public signatures and error behavior are specified in [`api.md`](api.md). The engine lazily hydrates and caches index categories; direct and descendant-expanded tag memberships are distinct queries, with duplicate paths deduplicated by set union.
 
 ### 6.1 Relational pairs must remain coupled
 
@@ -297,7 +305,7 @@ A valid category/value query with no matching cards returns an empty `frozenset`
 
 ## 7. File lifecycle and refresh guarantees
 
-The public file has **one stable name**: `carddb.sqlite`. No retained snapshot directories or history of previous database versions are required. A completed database is read-only in normal use. Package version, SQLite schema version, and upstream source timestamps are independent.
+The **default** installed filename is `carddb.sqlite`; explicit CLI or library calls may use another destination path. No history of old database versions is retained by default. A completed database is read-only in normal use. Package version, SQLite schema version, builder identifier, and upstream source timestamps are independent.
 
 **Explicit initialization/update procedure:**
 
@@ -309,23 +317,27 @@ The public file has **one stable name**: `carddb.sqlite`. No retained snapshot d
 6. Atomically replace `carddb.sqlite` **where the operating system supports doing so safely**. On Windows, an open database can prevent replacement; report a clear error and leave the original file intact. Existing CardDB objects must be reopened to see updated data.
 7. Remove temporary files as appropriate. If any earlier step fails, leave the valid existing database untouched.
 
+**Recovery and concurrency.** The workflow uses cooperative workflow and activation lock files with inspectable owner metadata. The `mtg-carddb locks` command is read-only and never automatically removes stale locks or workspaces. Existing update targets are checked for CardDB compatibility and changes during the rebuild. Cleanup errors are logged rather than masking an earlier build failure or a successful activation. File fingerprint checks narrow but cannot eliminate the last-instant race against unrelated external writers.
+
 No automatic network access occurs merely because an application imports the package or opens a database. The updater should also prevent concurrent rebuilds targeting the same path.
 
 ### Database metadata and compatibility
 
-- SQLite `PRAGMA user_version` identifies the schema (initial proposal: `1`).
-- `database_metadata` records one build timestamp and the package version that built it.
-- `source_metadata` records each Scryfall export/catalog's provenance; `source_updated_at` is nullable for sources without an upstream update timestamp.
+- SQLite `PRAGMA user_version` identifies the implemented schema (`1`).
+- `database_metadata` records a build timestamp and a **builder implementation identifier**. The current builder writes `snapshot-builder-v1`; this is not the installed Python package version.
+- `source_metadata` records verified input provenance when supplied to the builder. The standard initialization/update workflow records both bulk exports and captured reference responses. `source_updated_at` is nullable for reference sources without an authoritative upstream timestamp. The overall freshness calculation considers both required bulk sources, using the oldest valid timestamp, or `unknown` if either required timestamp cannot be established.
 - A database is a **point-in-time build** of several Scryfall sources; their timestamps need not be identical.
 - For an unsupported schema version, the initial policy is **rebuild**, not in-place migration. The runtime must refuse to open an incompatible file with a helpful diagnostic.
 
 ## 8. Validation and tests
 
-The implementation should include small synthetic fixtures and **captured real Scryfall fixtures** for normal cards, Adventures, split cards, transforming/modal double-faced cards, meld, reversible cards (including repeated names such as `Blood Crypt // Blood Crypt`), empty-versus-missing color data, fractional mana values, multiword subtypes (including `Time Lord`), Vanguard characteristics, tag graph branches, alias collisions, tagging-weight serialization, and multiple rarities in one set. Tests must cover a reversible-only identity with incomplete required fields (strict failure), non-reversible preference, same-ID field conflicts, stable tie-breaking independent of source record order, and the three distinct `game_changer` states (`1`, `0`, `NULL`).
+The test suite includes synthetic fixtures and has been exercised against full Scryfall data. Regression coverage should continue to include the following cases.
+
+These include normal cards, Adventures, split cards, transforming/modal double-faced cards, meld, reversible cards (including repeated names such as `Blood Crypt // Blood Crypt`), empty-versus-missing color data, fractional mana values, multiword subtypes (including `Time Lord`), Vanguard characteristics, tag graph branches, alias collisions, tagging-weight serialization, and multiple rarities in one set. Tests must cover a reversible-only identity with incomplete required fields (strict failure), non-reversible preference, same-ID field conflicts, stable tie-breaking independent of source record order, and the three distinct `game_changer` states (`1`, `0`, `NULL`).
 
 **Required equivalence property:** for any supported query, the indexed Python result equals the set of Oracle IDs obtained by evaluating the corresponding predicate over normalized source records. Test union, intersection, difference, descendant expansion, and deduplication of multifaced cards. Test that failed imports and failed file replacement leave the original usable database unchanged.
 
-Benchmark initial index-building time, repeated-query latency, memory use, SQLite file size, and card resolution. Compare eager, category-lazy, and value-lazy index hydration before committing to one caching strategy. A **full current-export integration test** is a release gate: fetch actual Scryfall bulk files, record their source timestamps, run all importer invariants, and compare a small sample of normalized Oracle identities and set/rarity relationships against Scryfall Card/Set API responses. This validation is mandatory before describing a release as complete.
+Benchmark initial index-building time, repeated-query latency, memory use, SQLite file size, and card resolution. Compare eager, category-lazy, and value-lazy index hydration before committing to one caching strategy. A **full current-export integration run** is a release check: fetch Scryfall bulk files, record source timestamps, and verify importer invariants with an end-to-end CLI build. An independent spot-check of selected Oracle identities and historical relationships against Scryfall Card/Set API responses is a separate correctness check and must not be claimed complete unless performed.
 
 ## 9. Resolution of design questions
 
@@ -337,7 +349,7 @@ These are now specified as **importer policies and acceptance tests**, rather th
 | 2. Set metadata | **Always fetch Scryfall's `/sets` catalog**. `default_cards` provides printing set identifiers, but set-level `digital` and `set_type` belong to the Scryfall Set object. Verify the full set UUID/code join and record source provenance. See §2. |
 | 3. Historical completeness | Use **`default_cards` alone** for all observed Oracle/set/rarity/game memberships. It includes the relevant printings without duplicating every language variation; `all_cards` adds localization outside the project scope. Validate distinct tuple counts and the reversible-face expansion. |
 | 4. Tag source encoding | Use the documented Tag/Tagging structure (`id`, `slug`, hierarchy/aliases, nested Oracle-ID taggings with weight/optional annotation). Accept null or absent optional graph/alias arrays. Preserve raw textual weight labels, do not infer ordering, and report unexpected live-export shapes. See §5 and §8. |
-| 5. Type parsing | Keep original type lines and parse face-level fields with a tested **catalog-aware parser**, including multiword names and unusual layouts. Reject unknown/ambiguous classifications; never split all subtype names on spaces. See §5.1. |
+| 5. Type parsing | Keep original type lines and parse face-level fields with tested **catalog-aware longest-valid segmentation**, including multiword names and unusual layouts. Reject sequences without a complete parse; never split all subtype names on spaces. See §5.1. |
 | 6. Public API semantics | Keep the *schema* independent of final API method naming. Public identities use WUBRG strings and `frozenset[str]`; whole-card type membership means **any face**. `cards.colors` vs `faces.colors` remain separate source facts; aggregate `by_color()` semantics are specified in the companion `api.md`; the persisted root/face values are not rewritten. See §§4, 6. |
 
 ### 9.1 Verification evidence and limitations
@@ -350,4 +362,4 @@ Relevant upstream definitions and implementations consulted during design:
 - [Scryfall's catalog endpoints](https://scryfall.com/docs/api/catalogs) expose type vocabularies for validation, including creature, land, artifact, and other subtypes.
 - A [third-party Default Cards import analysis](https://tangled.org/eth0net.io/manaweb/blob/main/docs/scryfall.md) reports that reversible printings can disagree with normal printings on field *presence* and printable name (`Blood Crypt // Blood Crypt`). This is corroborating evidence, **not** a substitute for a new complete-export audit.
 
-**Limit of this design review:** upstream APIs and independent importer analyses were researched, but the current full Scryfall bulk payloads were **not downloaded and exhaustively inspected** as part of writing this specification. Exact live tag field encodings, newly introduced layouts, rare reversible-only identities, and complete import counts remain subject to the mandatory full-export acceptance test in §8. This is a *verification task*, not an undecided schema design question. In all cases, new unsupported input causes diagnostic failure while preserving the last valid `carddb.sqlite`.
+**Verification boundary:** Full real-export builds and detailed field audits have been performed during development, but Scryfall data continues to evolve. Reproducing an exact audit requires its input files, hashes, timestamps, and builder implementation. The normal workflow records provenance but removes temporary source files after activation. Unsupported required input causes a diagnostic build failure rather than fabricated card facts.

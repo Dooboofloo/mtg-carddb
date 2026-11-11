@@ -1,4 +1,3 @@
-
 # MTG CardDB
 
 **MTG CardDB** is a local-first Python library for querying *Magic: The Gathering* card data using immutable, composable sets of Oracle IDs.
@@ -371,6 +370,8 @@ CI runs automated tests on Windows, Linux, and macOS with Python 3.11, 3.12, and
 - [SQLite schema and import specification](docs/schema.md)
 
 These documents describe the intended data model and detailed query semantics. Implementation and documentation changes are reviewed together as the project approaches a stable release.
+
+For development and releases, see [Contributing](CONTRIBUTING.md), the [Changelog](CHANGELOG.md), and the [Release checklist](docs/releasing.md).
 
 ## Scope and limitations
 
