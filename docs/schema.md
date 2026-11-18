@@ -1,6 +1,6 @@
 # MTG CardDB — Database Schema
 
-**Status:** Implemented SQLite schema v1 — package 1.1.0 (schema unchanged since 1.0.0).\
+**Status:** Implemented SQLite schema v1 — package 1.2.0 (schema unchanged since 1.0.0).\
 **Compatibility:** [`roadmap.md`](roadmap.md) (schema and Python package versions are independent).
 **Database file:** `carddb.sqlite`  
 **Canonical data source:** Scryfall  
@@ -270,6 +270,7 @@ SQL persists normalized facts; Python builds an inverted index mapping attribute
 | `by_legality("vintage", "restricted")` | `card_legalities` | Exact Scryfall format/status pair |
 | `by_tag("ramp")` | `tags`, `tag_relationships`, `card_tags` | Direct tags **plus descendants** by default |
 | `by_tag("ramp", include_descendants=False)` | Same | Directly tagged cards only |
+| `has_tag(card_id, "ramp")` | `tags`, `tag_relationships`, `card_tags` | Single-card check: direct `ramp` tag or `ramp` as an ancestor of a direct tag |
 | `by_set("m21")` | `sets`, `card_set_rarities` | Cards observed anywhere in that set |
 | `by_rarity("common", game="paper")` | `card_set_rarities` | Ever observed at that rarity/platform |
 | `by_set_rarity("m21", "common", game="paper")` | `card_set_rarities` | Rarity **in that set and game** |
@@ -298,7 +299,7 @@ Let `D(t)` be the direct Oracle-ID membership of tag `t` and `Desc(t)` the set o
 
 `T(t) = D(t) ∪ ⋃{ D(d) : d ∈ Desc(t) }`
 
-Store only direct taggings and direct parent/child edges in SQL. Graph traversal and expanded membership are derived and cached in Python, bound to the currently opened database. Multiple parents are allowed; cycles are invalid. A broad tag does not receive fabricated direct taggings or inherited tagging weights.
+Store only direct taggings and direct parent/child edges in SQL. For bulk `by_tag()` queries, graph traversal and expanded membership are derived and cached in Python, bound to the currently opened database. For `has_tag(card_id, t)`, the default means `card_id ∈ T(t)`: equivalently, `t` is either directly assigned to the card or is an ancestor of one of its direct tags. With `include_ancestors=False`, membership is restricted to `D(t)`. The single-card check uses targeted SQLite rather than hydrating the global tag index. Multiple parents are allowed; cycles are invalid in imported data. A broad tag does not receive fabricated direct taggings or inherited tagging weights.
 
 ### 6.3 Errors and absence
 

@@ -1,6 +1,6 @@
 # MTG CardDB — Python API Contract
 
-**Status:** Stable public Python API — `mtg-carddb` 1.1.0.\
+**Status:** Stable public Python API — `mtg-carddb` 1.2.0.\
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
 **Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).
@@ -160,13 +160,17 @@ The CLI also exposes `mtg-carddb info` and the read-only `mtg-carddb locks` comm
 
 ## 4. Common card-query contract
 
-All methods in this section return an actual `frozenset[str]` of **Oracle IDs** and never return `Card` objects, mutable collections, lazy SQL cursors, or custom query objects. `db.all_cards()` is the universe `U` for that database.
+All *membership-search* methods in this section return an actual
+`frozenset[str]` of **Oracle IDs**, never `Card` objects, mutable collections,
+lazy SQL cursors, or custom query objects. `suggest_names()` instead returns
+an ordered tuple of name suggestions; `has_tag()` returns one boolean.
+`db.all_cards()` is the universe `U` for the database.
 
 - `&` performs intersection; `|` performs union; `-` performs difference; `^` performs symmetric difference.
 - `db.all_cards() - result` is complement relative to the current database universe.
 - Reassignment with `&=`, `|=`, or `-=` does not mutate an existing frozenset.
 - A valid search with no matching cards returns `frozenset()`.
-- Input normalization is documented by query family; ordinary strings should not be interpreted as regular expressions, fuzzy searches, or a Scryfall search-language expression.
+- Input normalization is documented by query family; membership searches do not interpret ordinary strings as regular expressions, fuzzy searches, or Scryfall search-language expressions.
 
 ### 4.1 Universe, names, and layouts
 
@@ -175,6 +179,7 @@ All methods in this section return an actual `frozenset[str]` of **Oracle IDs** 
 | `all_cards() -> frozenset[str]` | Every stored Oracle identity |
 | `by_name(name: str) -> frozenset[str]` | Exact Unicode case-insensitive match against the whole-card name **or any face name**; not substring/fuzzy matching |
 | `preload_names() -> None` | Explicitly hydrate the complete in-memory name index for repeated searches across many distinct names |
+| `suggest_names(name: str, *, limit: int = 5, cutoff: float = 0.6) -> tuple[str, ...]` | Opt-in ranked similar whole-card or individual-face **names**, not Oracle IDs; see below |
 | `by_layout(layout: str) -> frozenset[str]` | Matching Scryfall card layout; case-insensitive canonical-value comparison |
 | `game_changers() -> frozenset[str]` | Oracle IDs explicitly classified `game_changer=True` by Scryfall in this build; missing and `False` are excluded. |
 
@@ -190,6 +195,20 @@ populates the complete name index once, clears the small cache, and serves
 subsequent name queries from the in-memory index. Existing SQLite schema-v1
 databases require no migration or rebuild. Cache capacity, timing, and eviction
 are implementation details, not stable API promises.
+
+**Fuzzy suggestions in v1.2:** `suggest_names()` accepts a name and returns a
+similarity-ranked tuple of distinct canonical whole-card or face names. It
+compares names using Unicode NFKC normalization, `casefold()`, and normalized
+punctuation/whitespace; candidates are ranked using the Python standard-library
+`difflib` matcher. The default `cutoff` of `0.6` is a similarity threshold in
+`[0, 1]`, and `limit` is a positive integer. Invalid numeric ranges raise
+`ValueError`, and invalid types (including booleans) raise `TypeError`.
+A query with no meaningful characters or no sufficiently close matches returns
+`()`; suggestions never silently change `by_name()` results. The candidate-name
+catalog is loaded lazily on first fuzzy request and retained per handle, so
+ordinary exact name searches remain cheap. Suggested names may be passed to
+`by_name()` to obtain their Oracle IDs. This does not implement substring search
+or autocomplete.
 
 ### 4.2 Color identity
 
@@ -269,10 +288,22 @@ Mana-value arguments must be finite real numbers (excluding `bool`, NaN, and inf
 
 `by_tag(slug: str, *, include_descendants: bool = True) -> frozenset[str]`
 
+`has_tag(oracle_id: str, slug: str, *, include_ancestors: bool = True) -> bool`
+
+The second method tests one card without hydrating the global tag index.
+With `include_ancestors=True`, it returns `True` if the requested tag is
+**directly assigned to the card or is an ancestor of one of its directly
+assigned tags**. For example, a card directly tagged `land-ramp` also matches
+`has_tag(card_id, "ramp")` when `ramp` is its parent.
+With `include_ancestors=False`, only direct assignment of the requested tag
+counts. Unknown card IDs raise `KeyError`, while tag validation follows
+`by_tag()`. Multi-parent graphs and cycles are handled without duplication
+or infinite traversal.
+
 Tag lookups accept canonical slugs or Scryfall aliases, case-insensitively. Exact canonical slugs take precedence over aliases. An alias resolving to multiple tags raises `AmbiguousTagError`; an unknown slug/alias raises `UnknownTagError`.
 
-- By default, include the direct tag members **plus** all descendant tags' direct members.
-- With `include_descendants=False`, include only directly assigned members.
+- `by_tag()` includes direct members **plus** all descendant tags' direct members by default.
+- With `by_tag(..., include_descendants=False)`, include only directly assigned members.
 - Descendants follow the imported **directed** tag graph, with deduplication of multiple paths.
 - Query expansion does not create direct parent taggings or inherited tagging weights.
 - The initial `by_tag()` API does not filter by tagging weight. `taggings_for()` exposes original direct weights and annotations.
@@ -344,10 +375,12 @@ Catalog values are useful for autocomplete, validation, and discoverability. The
 | --- | --- |
 | Valid search value with no matching cards | Empty `frozenset()` |
 | Exact name not found | Empty `frozenset()` |
-| Unknown card ID in `db[...]`, `resolve()`, or a relationship method | `KeyError` |
+| No sufficiently close suggestions | Empty tuple `()` |
+| Invalid suggestion `limit` / `cutoff` | `TypeError` for incorrect types; `ValueError` for out-of-range values |
+| Unknown card ID in `db[...]`, `resolve()`, `has_tag()`, or a relationship method | `KeyError` |
 | Unknown card ID in `db.get()` | `None` |
-| Unknown tag slug/alias in `by_tag()` | `UnknownTagError` |
-| Ambiguous tag alias in `by_tag()` / `get_tag()` | `AmbiguousTagError` |
+| Unknown tag slug/alias in `by_tag()` or `has_tag()` | `UnknownTagError` |
+| Ambiguous tag alias in `by_tag()` / `has_tag()` / `get_tag()` | `AmbiguousTagError` |
 | Unknown format in `by_legality()` | `UnknownFormatError` |
 | Unknown set code in set queries | `UnknownSetError` |
 | Invalid WUBRGC color-set notation, match mode, status, rarity, game, or numeric range | `ValueError` |
@@ -466,7 +499,7 @@ These are **not** part of the initial public contract:
 
 - User-authored indexes, persistent user classifications, or writing/modifying the canonical database through `CardDatabase`.
 - Deck construction, Commander eligibility, house-banned cards, restricted-copy enforcement, or format-specific policy layers.
-- Scryfall query-language parsing, fuzzy/substring name matching, general-purpose Boolean query-builder objects, or arbitrary Oracle-text semantic inference.
+- Scryfall query-language parsing, substring/autocomplete name matching, general-purpose Boolean query-builder objects, or arbitrary Oracle-text semantic inference. Fuzzy **suggestions** are supported, but not automatic fuzzy ID matching.
 - Same-face compound predicates, numeric interpretation of symbolic power/toughness, and parsed alternate casting characteristics.
 - Printing records, artwork, pricing, card collections, historical Oracle text, and dated format legality timelines.
 - Print-dependent Attraction light patterns and Scryfall `all_parts` related-card links. Attractions are deferred; `all_parts` is omitted. `game_changer` **is** in scope and stored in the nullable `cards.game_changer` column as described in §9.3.
@@ -476,7 +509,7 @@ Applications remain free to create their own sets and combine them with CardDB's
 
 ## 11. Compatibility boundary
 
-This document describes the stable **1.x library-facing API** (including the additive v1.1 name-preloading method) over SQLite schema version 1. Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
+This document describes the stable **1.x library-facing API** (including the additive v1.1 name-preloading and v1.2 suggestion/tag-membership methods) over SQLite schema version 1. Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
 
 The following are **not** public compatibility commitments: SQLite query plans, internal bit allocations, memory/index layout, hydration timing, cache hit behavior, caching object identity, and module boundaries of the internal implementation. Database schema compatibility is governed separately by the frozen `schema.md` and SQLite's `user_version`.
 

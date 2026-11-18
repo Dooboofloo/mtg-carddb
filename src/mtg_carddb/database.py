@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from collections import OrderedDict
 from collections.abc import Iterable
+from difflib import get_close_matches
 from math import isfinite
 from pathlib import Path
 from typing import Literal
@@ -39,6 +41,14 @@ def _text(value: str, name: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
     return value.casefold()
+
+
+def _normalize_suggestion(name: str) -> str:
+    """Normalize case and punctuation for suggestions, not exact searches."""
+    text = unicodedata.normalize("NFKC", name).casefold()
+    return " ".join("".join(
+        character if character.isalnum() else " " for character in text
+    ).split())
 
 
 def _color_mask(colors: str) -> int:
@@ -118,6 +128,7 @@ class CardDatabase:
         self._indexes = store.index_store(valid_ids=self.all_cards)
         self._catalog_cache: dict[str, frozenset[str]] = {}
         self._name_cache: OrderedDict[str, frozenset[str]] = OrderedDict()
+        self._suggestion_names: dict[str, tuple[str, ...]] | None = None
         self._closed = False
 
     @classmethod
@@ -265,6 +276,54 @@ class CardDatabase:
         if len(self._name_cache) > _NAME_CACHE_CAPACITY:
             self._name_cache.popitem(last=False)
         return result
+
+    def suggest_names(
+        self,
+        name: str,
+        *,
+        limit: int = 5,
+        cutoff: float = 0.6,
+    ) -> tuple[str, ...]:
+        """Suggest similar canonical card or face names, best match first.
+
+        Suggestions are not card identities. Use by_name() to select an
+        actual Oracle-ID set; exact lookups never invoke fuzzy matching.
+        The name catalog is only loaded on the first suggestion request.
+        """
+        self._ensure_open()
+        _text(name, "name")
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("limit must be a positive integer")
+        if limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        if isinstance(cutoff, bool) or not isinstance(cutoff, (int, float)):
+            raise TypeError("cutoff must be a number between 0 and 1")
+        if not 0 <= cutoff <= 1 or not isfinite(cutoff):
+            raise ValueError("cutoff must be a number between 0 and 1")
+
+        key = _normalize_suggestion(name)
+        if not key:
+            return ()
+
+        if self._suggestion_names is None:
+            groups: dict[str, set[str]] = {}
+            for candidate in self._store.all_names():
+                normalized = _normalize_suggestion(candidate)
+                if normalized:
+                    groups.setdefault(normalized, set()).add(candidate)
+            self._suggestion_names = {
+                normalized: tuple(sorted(names, key=lambda n: (n.casefold(), n)))
+                for normalized, names in groups.items()
+            }
+
+        closest = get_close_matches(
+            key, self._suggestion_names, n=limit, cutoff=cutoff
+        )
+        return tuple(
+            original
+            for normalized in closest
+            for original in self._suggestion_names[normalized]
+        )[:limit]
 
     def preload_names(self) -> None:
         """Load the full name index for applications making many distinct queries."""
@@ -466,6 +525,30 @@ class CardDatabase:
             return result
 
         return self._indexes.derive("expanded_tag", key, build)
+
+    def has_tag(
+        self,
+        oracle_id: str,
+        slug: str,
+        *,
+        include_ancestors: bool = True,
+    ) -> bool:
+        """Check whether a requested tag is direct or an ancestor of a direct tag.
+
+        Aliases resolve as in by_tag(). An unknown card raises KeyError,
+        while an unknown tag raises UnknownTagError. This does not hydrate
+        the global tag index.
+        """
+        self._ensure_open()
+        _text(oracle_id, "oracle_id")
+        if type(include_ancestors) is not bool:
+            raise TypeError("include_ancestors must be bool")
+        tag = self.get_tag(slug)
+        if tag is None:
+            raise UnknownTagError(f"unknown Oracle tag: {slug!r}")
+        return self._store.card_has_tag(
+            oracle_id, tag.slug, include_ancestors=include_ancestors
+        )
 
     def by_legality(
         self, format: str, status: str

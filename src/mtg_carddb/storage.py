@@ -255,6 +255,44 @@ class SQLiteStore:
             "WHERE ct.oracle_id = ? ORDER BY t.slug", (oracle_id,)
         ))
 
+    def all_names(self) -> tuple[str, ...]:
+        """Canonical whole-card and face names for opt-in fuzzy suggestions."""
+        return tuple(row["name"] for row in self._rows(
+            "SELECT name FROM cards UNION SELECT name FROM faces "
+            "ORDER BY name COLLATE NOCASE, name"
+        ))
+
+    def card_has_tag(
+        self, oracle_id: str, slug: str, *, include_ancestors: bool
+    ) -> bool:
+        """Check one card using the tag graph without building an index."""
+        self._require_card(oracle_id)
+        if not include_ancestors:
+            return bool(self._rows(
+                "SELECT 1 FROM card_tags AS ct JOIN tags AS t "
+                "ON t.tag_id = ct.tag_id "
+                "WHERE ct.oracle_id = ? AND t.slug = ? COLLATE NOCASE "
+                "LIMIT 1",
+                (oracle_id, slug),
+            ))
+
+        # UNION (rather than UNION ALL) deduplicates cycles and multi-parent
+        # paths. Descendants include the requested tag itself. Checking
+        # descendants here is equivalent to checking ancestors of the
+        # card's directly assigned tags.
+        return bool(self._rows(
+            "WITH RECURSIVE descendants(tag_id) AS ("
+            "SELECT tag_id FROM tags WHERE slug = ? COLLATE NOCASE "
+            "UNION "
+            "SELECT r.child_id FROM tag_relationships AS r "
+            "JOIN descendants AS d ON r.parent_id = d.tag_id"
+            ") "
+            "SELECT 1 FROM card_tags AS ct "
+            "JOIN descendants AS d ON d.tag_id = ct.tag_id "
+            "WHERE ct.oracle_id = ? LIMIT 1",
+            (slug, oracle_id),
+        ))
+
     def set_rarities_for(self, oracle_id: str) -> tuple[SetRarity, ...]:
         self._require_card(oracle_id)
         return tuple(SetRarity(row["code"], row["rarity"], row["game"])

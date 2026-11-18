@@ -8,6 +8,27 @@ The project follows a `MAJOR.MINOR.PATCH` version scheme. Releases below 1.0.0 m
 
 No changes recorded yet.
 
+## 1.2.0 — Fuzzy suggestions and single-card tag checks
+
+### Added
+
+- `CardDatabase.suggest_names(name, *, limit=5, cutoff=0.6)` for opt-in,
+  dependency-free fuzzy suggestions of canonical whole-card and face names.
+  Similarity compares Unicode case-folded, punctuation-normalized names and
+  returns a deterministically ordered tuple, not Oracle IDs.
+- `CardDatabase.has_tag(oracle_id, slug, *, include_ancestors=True)` for
+  direct or hierarchical membership checks of one card. Canonical tag slugs
+  and aliases follow the same error semantics as `by_tag()`.
+- Focused tests for name suggestions, optional lazy catalog loading,
+  punctuation and Unicode normalization, multi-parent/cyclic tags, and
+  direct-versus-ancestor-inherited membership.
+
+### Compatibility
+
+- Existing `by_name()` and `by_tag()` results and their semantics are unchanged.
+- No new runtime dependencies, SQLite schema changes, data migrations, or
+  snapshot rebuilds required; all new lookups use existing schema-v1 data.
+
 ## 1.1.0 — Fast individual-name lookups
 
 ### Added

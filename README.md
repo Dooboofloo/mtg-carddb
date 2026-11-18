@@ -57,8 +57,24 @@ names in one session, call `db.preload_names()` once to load the full in-memory
 name index and speed up subsequent queries. This is optional and does not
 change returned results.
 
+For misspelled names, request suggestions explicitly rather than changing the
+semantics of `by_name()`:
+
+```python
+with CardDatabase.open() as db:
+    print(db.suggest_names("Sol Rign", limit=3))
+    # e.g. ('Sol Ring', ...)
+```
+
+`suggest_names()` returns an ordered tuple of canonical whole-card or face
+**names**, not IDs; use `by_name()` on a chosen suggestion to retrieve IDs.
+Suggestions compare names case-insensitively, normalizing common punctuation
+and whitespace differences. The candidate catalog loads only when suggestions
+are first requested; exact-name startup and the bounded name cache are
+unaffected. Poor matches may yield no suggestions.
+
 Existing schema-v1 databases work unchanged; no `init` or `update` is required
-to use the faster lookup path.
+to use the name-lookup or suggestion paths.
 
 ## Query cards
 
@@ -101,15 +117,26 @@ with CardDatabase.open() as db:
         slug = sorted(db.tag_slugs)[0]
         tagged = db.by_tag(slug)  # Includes descendants by default
         direct = db.by_tag(slug, include_descendants=False)
+
+        # Check a single card without loading the global tag index.
+        for card_id in db.by_name("Sol Ring"):
+            is_tagged = db.has_tag(card_id, slug)
+            directly_tagged = db.has_tag(
+                card_id, slug, include_ancestors=False
+            )
 ```
+
+`by_tag()` expands a requested tag downward to its descendants. `has_tag()`
+checks the card's direct tags and, by default, their ancestors; set
+`include_ancestors=False` to require direct assignment.
 
 Tags and their hierarchy depend on the installed Scryfall Oracle Tags snapshot. The library reports source legality and card properties; it does not implement deck-construction rules or user-specific bans.
 
 ## What it supports
 
-- **Fast exact-name lookup:** low-overhead first access, a bounded per-handle cache for repeated names, and optional full name-index preloading.
+- **Fast exact-name lookup and fuzzy suggestions:** low-overhead exact searches with a bounded per-handle cache, optional full name-index preloading, and opt-in dependency-free similar-name suggestions.
 - **Composable inverted-index searches:** color, color identity, card types and subtypes, supertypes, keywords, mana value, produced mana, layouts, and other documented predicates.
-- **Oracle Tags:** direct classification assignments and optional descendant expansion.
+- **Oracle Tags:** direct classification assignments, descendant expansion, and lightweight single-card `has_tag()` checks.
 - **Legality and printing history:** current Scryfall format statuses and historical set/rarity/game observations, without conflating unrelated printings.
 - **Multifaced cards:** normalized, immutable card and face records, including reversible layouts.
 - **SQLite snapshots:** read-only access, explicit initialization/updates, source provenance, and freshness diagnostics.
@@ -125,7 +152,7 @@ CardDB is a mechanical card-data library, **not** a rules engine, full collectio
 - [Roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) — current milestones and possible follow-on work
 - [Contributing](https://github.com/Dooboofloo/mtg-carddb/blob/main/CONTRIBUTING.md) · [Changelog](https://github.com/Dooboofloo/mtg-carddb/blob/main/CHANGELOG.md) · [Release guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/releasing.md)
 
-**Version 1.1.0** adds a fast path for exact-name retrieval and a bounded name cache while preserving the stable 1.x API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
+**Version 1.2.0** adds fuzzy name suggestions and single-card hierarchical tag checks on top of the fast v1.1 lookup path, while preserving the stable 1.x API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
 
 ## Development
 

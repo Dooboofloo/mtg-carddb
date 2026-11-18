@@ -102,6 +102,24 @@ lookups, and does not alter matching semantics. Neither approach needs a
 rebuild of an existing schema-v1 database. The name cache and its capacity are
 implementation optimizations, not public 1.x compatibility guarantees.
 
+### Fuzzy suggestions for misspelled names
+
+Use `suggest_names()` when a user enters an approximate name. It only loads its
+candidate-name catalog when requested and does not affect exact search behavior:
+
+```python
+with CardDatabase.open() as db:
+    suggestions = db.suggest_names("Sol Rign", limit=5)
+    for candidate in suggestions:
+        print(candidate, db.resolve(db.by_name(candidate)))
+```
+
+The result is a tuple of names (including individual card-face names), ranked
+by similarity. Names compare using Unicode normalization and case-insensitive,
+punctuation-tolerant matching. Poor matches may return `()`; the default
+similarity cutoff is `0.6` and can be configured from `0.0` to `1.0`.
+Suggestions never automatically replace or expand results from `by_name()`.
+
 ### Name lookup and exclusions
 
 ```python
@@ -112,7 +130,7 @@ with CardDatabase.open() as db:
         print(card.name)
 ```
 
-`by_name()` is case-insensitive but is not substring or fuzzy search. Unknown Oracle IDs raise `KeyError` with `db[id]`; use `db.get(id)` for an optional lookup.
+`by_name()` remains an exact, case-insensitive search; fuzzy suggestions are an explicit separate operation. Unknown Oracle IDs raise `KeyError` with `db[id]`; use `db.get(id)` for an optional lookup.
 
 ### Oracle Tags
 
@@ -126,6 +144,21 @@ with CardDatabase.open() as db:
 ```
 
 An unknown tag raises `UnknownTagError`. Tag slugs and hierarchy come from the installed Oracle Tags snapshot and may change with Scryfall source updates.
+
+For single-card tag membership, use `has_tag()` instead of creating a
+whole-database tag result set:
+
+```python
+with CardDatabase.open() as db:
+    for oracle_id in db.by_name("Sol Ring"):
+        if db.has_tag(oracle_id, "ramp"):
+            print("Tagged ramp directly or through a more specific tag")
+```
+
+For example, a card directly tagged `land-ramp` matches a check for `ramp`
+when `ramp` is its ancestor. Use `include_ancestors=False` to require a
+direct assignment of the requested tag. Aliases and
+unknown-tag errors behave like `by_tag()`; unknown card IDs raise `KeyError`.
 
 ### Printing-history observations
 

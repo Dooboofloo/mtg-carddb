@@ -33,14 +33,22 @@ of distinct names. Existing schema-v1 snapshots remain compatible.
 This is a backward-compatible minor release, with no changes to the data
 source pipeline, storage schema, or required runtime dependencies.
 
-## Possible work after 1.1
+## v1.2.0: fuzzy suggestions and single-card tags
+
+Version 1.2.0 adds `suggest_names()` for explicit, dependency-free fuzzy
+suggestions from whole-card and face names, plus `has_tag()` for testing one
+card's direct or hierarchical Oracle-tag membership. Neither changes the
+existing set-returning membership queries or forces exact lookups to load a
+name catalog. Both work with schema-v1 snapshots, with no new runtime packages.
+
+## Possible work after 1.2
 
 These are candidates, not prerequisites or a fixed release schedule.
 
 | Area | Potential direction |
 | --- | --- |
 | Downstream adoption | Use the published package in the original Commander generator; improve integration pain points through backward-compatible APIs |
-| Query correctness and performance | Additional targeted regression fixtures, performance benchmarks, and (if needed) persisted name-index optimization for many uncached distinct names |
+| Query correctness and performance | Additional targeted regression fixtures, fuzzy ranking benchmarks, and (if needed) persisted name-index optimization for many uncached distinct names |
 | Reproducible datasets | Optional source-export retention and deterministic rebuild manifests |
 | Additional data | Printing-specific records, related-card links, and narrowly scoped query predicates |
 | Extensions | Historical-format tooling, custom classifications, and other applications outside the core |
