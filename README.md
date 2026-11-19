@@ -152,7 +152,7 @@ CardDB is a mechanical card-data library, **not** a rules engine, full collectio
 - [Roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) — current milestones and possible follow-on work
 - [Contributing](https://github.com/Dooboofloo/mtg-carddb/blob/main/CONTRIBUTING.md) · [Changelog](https://github.com/Dooboofloo/mtg-carddb/blob/main/CHANGELOG.md) · [Release guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/releasing.md)
 
-**Version 1.2.0** adds fuzzy name suggestions and single-card hierarchical tag checks on top of the fast v1.1 lookup path, while preserving the stable 1.x API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
+**Version 1.2.1** fixes a Scryfall type-line import edge case and Windows build cleanup. Version 1.2.0 added fuzzy name suggestions and single-card hierarchical tag checks on top of the fast v1.1 lookup path, while preserving the stable 1.x API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
 
 ## Development
 

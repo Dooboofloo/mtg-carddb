@@ -56,18 +56,28 @@ def test_builder_deletes_failed_staging_file(
     cards.touch()
     tags.touch()
 
-    monkeypatch.setattr(
-        builder,
-        "iter_default_cards",
-        lambda _: iter([
-            {"layout": "normal", "oracle_id": "real"}
-        ]),
-    )
+    closed = []
+    retained_readers = []
+
+    def source(_path):
+        def generate():
+            try:
+                yield {"layout": "normal", "oracle_id": "real"}
+            finally:
+                closed.append(True)
+
+        reader = generate()
+        # Keep a reference to prove explicit closing, not just GC cleanup.
+        retained_readers.append(reader)
+        return reader
+
+    monkeypatch.setattr(builder, "iter_default_cards", source)
     monkeypatch.setattr(
         builder, "write_sets", lambda *_: 0
     )
 
-    def fail_import(*_):
+    def fail_import(_connection, printings, _vocabulary):
+        next(printings)
         raise ValueError("synthetic import failure")
 
     monkeypatch.setattr(
@@ -88,6 +98,8 @@ def test_builder_deletes_failed_staging_file(
         )
 
     assert not target.exists()
+    # The first pass reaches EOF; the second is closed on import failure.
+    assert closed == [True, True]
 
 
 def test_builder_filters_only_art_ids_and_keeps_snapshot(
@@ -125,7 +137,7 @@ def test_builder_filters_only_art_ids_and_keeps_snapshot(
     monkeypatch.setattr(
         builder,
         "iter_default_cards",
-        lambda _: iter(printings),
+        lambda _: (card for card in printings),
     )
     monkeypatch.setattr(
         builder, "write_sets", lambda *_: 1
@@ -324,7 +336,7 @@ def test_reference_archive_provenance_without_bulk_manifest(
     monkeypatch.setattr(
         builder,
         "iter_default_cards",
-        lambda _: iter(()),
+        lambda _: (card for card in ()),
     )
 
     monkeypatch.setattr(

@@ -31,6 +31,7 @@ Autobot
 Barbarian
 Barnyard
 Bat
+Booster
 Bear
 Beast
 Beaver
@@ -49,6 +50,7 @@ Clown
 Construct
 Control Point
 Cow
+Critter
 Crocodile
 Deer
 Demon
@@ -118,6 +120,7 @@ Robot
 Rogue
 Sable
 Scorpion
+Scotsman
 Secret Mission
 Shaman
 Ship
@@ -164,6 +167,26 @@ def parse_line_alias(type_line: str) -> str:
 
     if type_line == "Eaturecray — Igpay":
         return "Creature — Igpay"
+
+    if type_line == "Legendary Creature — Alien Perfomer":
+        # UNK's The Alien Spellslayer has a source subtype typo.
+        # Preserve the printed string; normalize only its indexed type.
+        return "Legendary Creature — Alien Performer"
+
+    # Source-verified missing separators in PUNK and SLD printings.
+    # Only these exact strings are fixed; do not infer arbitrary divisions
+    # between card types and subtypes in otherwise invalid source lines.
+    if type_line == "Legendary Creature Human Advisor":
+        return "Legendary Creature — Human Advisor"
+
+    if type_line == "Legendary Creature Human Noble":
+        return "Legendary Creature — Human Noble"
+
+    # Some source type lines spell the type/subtype divider as " -- ".
+    # Normalize only that delimiter for indexing. Vocabulary validation
+    # still rejects unknown card types and subtypes.
+    if " -- " in type_line:
+        type_line = type_line.replace(" -- ", " — ")
 
     if type_line.casefold() == "instant":
         return "Instant"

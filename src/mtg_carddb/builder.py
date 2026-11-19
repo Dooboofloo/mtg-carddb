@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -158,20 +159,22 @@ def build_snapshot(
 
     # Derive exclusions from raw Oracle IDs, not from the subset
     # of cards that happen to normalize successfully.
-    art_only = find_art_only_oracle_ids(
-        iter_default_cards(cards_path)
-    )
+    with closing(iter_default_cards(cards_path)) as printings:
+        art_only = find_art_only_oracle_ids(printings)
 
     excluded_by_tag: Counter[str] = Counter()
 
     with staging_database(output_path) as connection:
         sets = write_sets(connection, references.sets)
 
-        card_stats = ingest_printings(
-            connection,
-            iter_default_cards(cards_path),
-            references.vocabulary,
-        )
+        # Close the lazy gzip stream on both success and failure.
+        # Important on Windows, where open files block workspace removal.
+        with closing(iter_default_cards(cards_path)) as printings:
+            card_stats = ingest_printings(
+                connection,
+                printings,
+                references.vocabulary,
+            )
 
         tag_stats = ingest_oracle_tags(
             connection,

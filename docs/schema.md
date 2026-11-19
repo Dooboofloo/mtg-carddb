@@ -1,6 +1,6 @@
 # MTG CardDB — Database Schema
 
-**Status:** Implemented SQLite schema v1 — package 1.2.0 (schema unchanged since 1.0.0).\
+**Status:** Implemented SQLite schema v1 — package 1.2.1 (schema unchanged since 1.0.0).\
 **Compatibility:** [`roadmap.md`](roadmap.md) (schema and Python package versions are independent).
 **Database file:** `carddb.sqlite`  
 **Canonical data source:** Scryfall  
@@ -58,7 +58,7 @@ The importer must **not** use the first printing encountered: row order is not a
 
 This handles known reversible anomalies such as an overall printing named `Blood Crypt // Blood Crypt`, where the underlying Oracle identity's name remains `Blood Crypt`. It also prevents accidentally treating two unrelated reversible sides as a single multifaced gameplay card.
 
-**Validation status:** The importer has been exercised against complete real Scryfall exports, including a full CLI rebuild after the bounded gzip and subtype-parser changes. Repeating this validation against newer Scryfall data remains a release/update check. It does not guarantee that future upstream exports cannot introduce unsupported shapes.
+**Validation status:** The importer has been exercised against complete Scryfall exports in prior releases. For source-ingestion fixes, the release checklist requires a fresh, complete CLI initialization against current exports before publishing. Future upstream exports may still introduce unsupported source shapes.
 
 ## 3. Identity and normalization
 
@@ -244,7 +244,7 @@ The importer must enforce (strict builds fail if required guarantees cannot be m
 
 1. Every card has at least one face, with unique contiguous indices starting at 0.
 2. Every non-`art_series` printing is accounted for by normalized Oracle identities (ordinary or reversible face) or produces an actionable error. `art_series` printings are excluded by policy. No Oracle ID has conflicting supplied canonical mechanical characteristics; reversible-layout missing fields are not interpreted as disagreeing values.
-3. `face_types` accurately describes parsed face `type_line` values. Parse the `—` type/subtype separator and match subtype names using **catalog-aware longest-valid segmentation**, not whitespace splitting. A longest-prefix match is preferred only when the remaining tokens can also be parsed. If that choice dead-ends, the parser considers a shorter valid match. Sequences with no complete parse are rejected. Supertypes and other card-type tokens are validated against the appropriate reference vocabularies.
+3. `face_types` accurately describes parsed face `type_line` values. Parse the `—` type/subtype separator (also accepting source-provided spaced ASCII ` -- ` as an alternate delimiter) and match subtype names using **catalog-aware longest-valid segmentation**, not whitespace splitting. A longest-prefix match is preferred only when the remaining tokens can also be parsed. If that choice dead-ends, the parser considers a shorter valid match. Sequences with no complete parse are rejected. Supertypes and other card-type tokens are validated against the appropriate reference vocabularies. Known source-verified `UNK` novelty subtypes and exact malformed `PUNK`/`SLD` separator strings are interpreted for indexed classification without changing the stored source `type_line`; arbitrary missing separators are not guessed.
 4. Every legality status belongs to the supported status vocabulary; format identifiers come from Scryfall data, **not** a hardcoded list of favorite formats. The `game_changer` field is imported as `1` for explicit `True`, `0` for explicit `False`, and `NULL` when absent; missing values must not be coerced to `False`.
 5. All tag slugs are unique and parent/child edges form an **acyclic** directed graph. Read `parent_ids` and `child_ids` (which may be missing/null/empty) as the two views of the same directed relationships; when both describe a relationship, verify their consistency. Alias collisions are **permitted in SQL**, recorded as ambiguous in Python, and never resolved by guessing. Canonical exact slugs take precedence over aliases.
 6. `oracle_tags` input is a collection of tag objects (`id`, `slug`, `label`, optional `description`, `aliases`, `parent_ids`, `child_ids`, and nested `taggings`). Oracle taggings reference `oracle_id` and contain `weight` with optional `annotation`. Preserve source-supplied weights as text; no hardcoded ordering or SQL vocabulary constraint is introduced. Validate object type and field types at import time, and reject unexpected required-field omissions with clear diagnostics.

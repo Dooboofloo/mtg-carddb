@@ -1,6 +1,6 @@
 # MTG CardDB — Python API Contract
 
-**Status:** Stable public Python API — `mtg-carddb` 1.2.0.\
+**Status:** Stable public Python API — `mtg-carddb` 1.2.1.\
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
 **Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).

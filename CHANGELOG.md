@@ -8,6 +8,21 @@ The project follows a `MAJOR.MINOR.PATCH` version scheme. Releases below 1.0.0 m
 
 No changes recorded yet.
 
+## 1.2.1 — Scryfall source compatibility and cleanup
+
+### Fixed
+
+- Normalize the known `UNK` source typo `Alien Perfomer` to the `Performer` subtype for indexed classification while retaining the exact printed type line.
+- Accept Scryfall type lines using the spaced ASCII ` -- ` type/subtype divider (e.g. `Legendary Creature -- Aetherborn Vampire`) while retaining the original printed text and validating types against the catalogs.
+- Recognize the source-verified `UNK` novelty subtypes `Booster`, `Critter`, and `Scotsman` without relaxing validation of unknown subtypes.
+- Interpret two source-verified missing type/subtype separators in `Legendary Creature Human Advisor` (`PUNK`) and `Legendary Creature Human Noble` (`SLD`) for indexing while preserving the exact source type lines.
+- Audit the current default-cards export for remaining normalization errors before releasing this importer compatibility fix.
+- Close lazy Scryfall bulk readers explicitly when ingestion fails, preventing leaked gzip handles from interfering with temporary-workspace cleanup on Windows.
+
+### Compatibility
+
+- No public API, runtime dependency, or SQLite schema changes; existing snapshots do not require rebuilding solely due to the package update.
+
 ## 1.2.0 — Fuzzy suggestions and single-card tag checks
 
 ### Added
