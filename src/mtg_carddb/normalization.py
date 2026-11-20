@@ -151,11 +151,22 @@ def _legality_map(
 
 
 @dataclass(frozen=True, slots=True)
-class TypeVocabulary:
-    """Exact, externally supplied Magic type vocabulary.
+class TypeInterpretation:
+    """Parsed attributes and recoveries; original type_line is unchanged."""
 
-    `subtypes` is the union of subtype catalogs, including multiword names.
-    Unknown tokens and unparseable subtype sequences are rejected.
+    supertypes: frozenset[str]
+    types: frozenset[str]
+    subtypes: frozenset[str]
+    issues: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TypeVocabulary:
+    """Catalog-based type parser with conservative structural recovery.
+
+    An absent separator is inferred only if a unique catalog-backed split
+    exists. Explicitly separated, unknown subtypes are retained as printed,
+    not silently autocorrected; unexpected card types remain errors.
     """
 
     supertypes: frozenset[str]
@@ -165,157 +176,135 @@ class TypeVocabulary:
     def __post_init__(self) -> None:
         for name in ("supertypes", "card_types", "subtypes"):
             value = getattr(self, name)
-
             if isinstance(value, (str, bytes)):
-                raise TypeError(
-                    f"{name} must contain catalog strings"
-                )
-
+                raise TypeError(f"{name} must contain catalog strings")
             frozen = frozenset(value)
-
-            if any(
-                not isinstance(item, str) or not item
-                for item in frozen
-            ):
-                raise TypeError(
-                    f"{name} must contain nonempty strings"
-                )
-
+            if any(not isinstance(item, str) or not item for item in frozen):
+                raise TypeError(f"{name} must contain nonempty strings")
             object.__setattr__(self, name, frozen)
 
+    def _known_subtypes(self, tokens: list[str]) -> tuple[str, ...] | None:
+        """Deterministic complete segmentation; None if not catalog-backed."""
+        options: dict[str, list[tuple[tuple[str, ...], str]]] = {}
+        for name in self.subtypes:
+            words = tuple(name.split())
+            if words:
+                options.setdefault(words[0], []).append((words, name))
+        for entries in options.values():
+            entries.sort(key=lambda item: (-len(item[0]), item[1]))
+        n = len(tokens)
+        choices: list[tuple[str, int] | None] = [None] * (n + 1)
+        choices[n] = ("", n)
+        for pos in range(n - 1, -1, -1):
+            for words, name in options.get(tokens[pos], ()):
+                nxt = pos + len(words)
+                if nxt <= n and tokens[pos:nxt] == list(words) and choices[nxt]:
+                    choices[pos] = (name, nxt)
+                    break
+        if choices[0] is None:
+            return None
+        found: list[str] = []
+        pos = 0
+        while pos < n:
+            choice = choices[pos]
+            assert choice is not None
+            name, pos = choice
+            found.append(name)
+        return tuple(found)
+
+    def _subtypes_with_unknowns(self, tokens: list[str]) -> tuple[str, ...]:
+        """Retain contiguous unknown tokens as literal labels, without correcting spelling."""
+        # Prefer catalog-backed segmentation when possible, and otherwise
+        # retain unfamiliar words. Never guess a corrected spelling.
+        found: list[str] = []
+        unknown: list[str] = []
+        pos = 0
+        while pos < len(tokens):
+            choices = [
+                (len(words), name)
+                for name in self.subtypes
+                if (words := name.split())
+                and tokens[pos:pos + len(words)] == words
+            ]
+            if not choices:
+                unknown.append(tokens[pos])
+                pos += 1
+                continue
+            if unknown:
+                found.append(" ".join(unknown))
+                unknown.clear()
+            length, name = max(choices, key=lambda item: (item[0], item[1]))
+            found.append(name)
+            pos += length
+        if unknown:
+            found.append(" ".join(unknown))
+        return tuple(found)
+
     @lru_cache(maxsize=8192)
-    def parse(
-        self, type_line: str
-    ) -> tuple[
-        frozenset[str],
-        frozenset[str],
-        frozenset[str],
-    ]:
+    def interpret(self, type_line: str, *, strict: bool = False) -> TypeInterpretation:
         if not isinstance(type_line, str) or not type_line:
             raise NormalizationError("missing type line")
 
-        # Translate known printed terminology for indexing, while retaining
-        # the exact original type_line on the CardFace model.
-        parsed_line = parse_line_alias(type_line)
-        halves = parsed_line.split(" — ")
+        line = parse_line_alias(type_line)
+        parts = re.split(r"\s+(?:—|–|--|-)\s+", line)
+        if len(parts) > 2 or "—" in parts[0]:
+            raise NormalizationError(f"unsupported type line: {type_line!r}")
 
-        if len(halves) > 2 or "—" in halves[0]:
-            raise NormalizationError(
-                f"unsupported type line: {type_line!r}"
-            )
+        valid_left = self.supertypes | self.card_types
+        words = parts[0].split()
+        issues: list[str] = []
+        if len(parts) == 2 and any(sep in type_line for sep in (" -- ", " – ", " - ")):
+            issues.append("alternate_separator")
 
-        left = halves[0].split()
-
-        supertypes = frozenset(
-            word for word in left
-            if word in self.supertypes
-        )
-        types = frozenset(
-            word for word in left
-            if word in self.card_types
-        )
-
-        unknown = [
-            word for word in left
-            if word not in self.supertypes | self.card_types
-        ]
-
-        if unknown or not types:
-            raise NormalizationError(
-                f"unrecognized type line: {type_line!r}"
-            )
-
-        if len(halves) == 1:
-            return supertypes, types, frozenset()
-
-        # Plane subtypes are single locations, though they may be made up of several words.
-        # Preserve the complete source-provided location as a single subtype:
-        # "Plane — New Phyrexia" -> {"New Phyrexia"}.
-        if types == frozenset({"Plane"}):
-            location = halves[1].strip()
-
-            if not location:
-                raise NormalizationError(
-                    f"empty plane subtype in {type_line!r}"
-                )
-
-            return supertypes, types, frozenset({location})
-
-        tokens = halves[1].split()
-
-        if not tokens:
-            raise NormalizationError(
-                f"empty subtype list: {type_line!r}"
-            )
-
-        # Prefer the longest subtype that permits a complete parse.
-        # Greedy matching alone can fail: "A B C" may require
-        # "A" + "B C" when "A B" also exists but "C" does not.
-        options_by_first: dict[
-            str, list[tuple[tuple[str, ...], str]]
-        ] = {}
-
-        for name in self.subtypes:
-            words = tuple(name.split())
-
-            if words:
-                options_by_first.setdefault(
-                    words[0], []
-                ).append((words, name))
-
-        for options in options_by_first.values():
-            options.sort(
-                key=lambda pair: (-len(pair[0]), pair[1])
-            )
-
-        # Work backward to identify positions from which the
-        # remainder of the subtype sequence can be parsed.
-        #
-        # This avoids recursive backtracking and exponential
-        # behavior when subtype names overlap.
-        end = len(tokens)
-
-        reachable = [False] * (end + 1)
-        choices: list[
-            tuple[str, int] | None
-        ] = [None] * end
-
-        reachable[end] = True
-
-        for position in range(end - 1, -1, -1):
-            for words, name in options_by_first.get(
-                tokens[position], ()
-            ):
-                next_position = position + len(words)
-
+        # Only a unique split where *all* following subtypes are known can
+        # recover a missing delimiter. Unknown suffixes are too ambiguous.
+        if len(parts) == 1 and (
+            any(word not in valid_left for word in words)
+            or not any(word in self.card_types for word in words)
+        ):
+            options = []
+            for pos in range(1, len(words)):
+                left = words[:pos]
+                right = words[pos:]
                 if (
-                    next_position <= end
-                    and reachable[next_position]
-                    and tokens[position:next_position]
-                    == list(words)
+                    all(word in valid_left for word in left)
+                    and any(word in self.card_types for word in left)
+                    and self._known_subtypes(right) is not None
                 ):
-                    reachable[position] = True
-                    choices[position] = (
-                        name, next_position
-                    )
-                    break
+                    options.append(pos)
+            if len(options) != 1 or strict:
+                raise NormalizationError(f"unrecognized type line: {type_line!r}")
+            words, right = words[:options[0]], words[options[0]:]
+            parts = [" ".join(words), " ".join(right)]
+            issues.append("inferred_separator")
 
-        if not reachable[0]:
-            raise NormalizationError(
-                f"unrecognized subtype in {type_line!r}"
+        if (not words or any(word not in valid_left for word in words)
+                or not any(word in self.card_types for word in words)):
+            raise NormalizationError(f"unrecognized type line: {type_line!r}")
+        super_names = frozenset(word for word in words if word in self.supertypes)
+        type_names = frozenset(word for word in words if word in self.card_types)
+        if len(parts) == 1:
+            return TypeInterpretation(super_names, type_names, frozenset(), tuple(issues))
+
+        tokens = parts[1].split()
+        if not tokens:
+            raise NormalizationError(f"empty subtype list: {type_line!r}")
+        if type_names == frozenset({"Plane"}):
+            return TypeInterpretation(
+                super_names, type_names, frozenset({parts[1].strip()}), tuple(issues)
             )
 
-        found: set[str] = set()
-        position = 0
+        known = self._known_subtypes(tokens)
+        if known is None:
+            if strict:
+                raise NormalizationError(f"unrecognized subtype in {type_line!r}")
+            known = self._subtypes_with_unknowns(tokens)
+            issues.append("unknown_subtype")
+        return TypeInterpretation(super_names, type_names, frozenset(known), tuple(issues))
 
-        while position < end:
-            choice = choices[position]
-            assert choice is not None
-
-            name, position = choice
-            found.add(name)
-
-        return supertypes, types, frozenset(found)
+    def parse(self, type_line: str) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+        result = self.interpret(type_line)
+        return result.supertypes, result.types, result.subtypes
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +334,15 @@ class Candidate:
 
     faces: tuple[CardFace, ...]
     legalities: tuple[Legality, ...] | None
+    image_front: str | None = None
+    image_back: str | None = None
+    # Source-printing metadata does not define Oracle mechanics.
+    image_set_code: str | None = None
+    image_promo: bool = False
+    image_full_art: bool = False
+    image_frame_effects: tuple[str, ...] = ()
+    image_games: tuple[str, ...] = ()
+    type_issues: tuple[str, ...] = ()
 
     @property
     def missing(self) -> frozenset[str]:
@@ -393,6 +391,7 @@ def _face(
     context: str,
     *,
     allow_missing_type_line: bool = False,
+    issue_codes: list[str] | None = None,
 ) -> CardFace:
     name = _string(data, "name", context)
 
@@ -402,7 +401,12 @@ def _face(
         supertypes = types = subtypes = frozenset()
     else:
         type_line = _string(data, "type_line", context)
-        supertypes, types, subtypes = vocab.parse(type_line)
+        parsed = vocab.interpret(type_line)
+        supertypes, types, subtypes = (
+            parsed.supertypes, parsed.types, parsed.subtypes
+        )
+        if issue_codes is not None:
+            issue_codes.extend(parsed.issues)
 
     return CardFace(
         face_index=index,
@@ -434,6 +438,35 @@ def _invalid_face(printing_id: str, index: int) -> CardFace:
     raise NormalizationError(
         f"{printing_id}: invalid face {index}"
     )
+
+
+def _normal_image(data: object) -> str | None:
+    """Read only the normal image URI, without requiring imagery to exist."""
+    if not isinstance(data, Mapping):
+        return None
+    image_uris = data.get("image_uris")
+    if not isinstance(image_uris, Mapping):
+        return None
+    url = image_uris.get("normal")
+    return url if isinstance(url, str) and url.startswith("https://") else None
+
+
+def _printing_images(printing: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    """Distinguish physical card sides from merely multiple logical faces.
+
+    Normal single-sided and split/adventure cards have their imagery on the
+    root object. Double-faced cards expose images on their card_faces.
+    """
+    root = _normal_image(printing)
+    if root is not None:
+        return root, None
+    faces = printing.get("card_faces")
+    if not isinstance(faces, list):
+        return None, None
+    images = tuple(_normal_image(face) for face in faces)
+    front = images[0] if images else None
+    back = images[1] if len(images) == 2 and front is not None else None
+    return front, back
 
 
 def normalize_printing(
@@ -478,6 +511,25 @@ def normalize_printing(
 
     raw_faces = printing.get("card_faces")
 
+    # Image printing preference is independent of Oracle mechanics.
+    raw_effects = printing.get("frame_effects")
+    frame_effects = (
+        tuple(x for x in raw_effects if isinstance(x, str))
+        if isinstance(raw_effects, list) else ()
+    )
+    raw_games = printing.get("games")
+    image_games = (
+        tuple(x for x in raw_games if isinstance(x, str))
+        if isinstance(raw_games, list) else ()
+    )
+    image_metadata = dict(
+        image_set_code=printing.get("set") if isinstance(printing.get("set"), str) else None,
+        image_promo=printing.get("promo") is True,
+        image_full_art=printing.get("full_art") is True,
+        image_frame_effects=frame_effects,
+        image_games=image_games,
+    )
+
     if layout == "reversible_card":
         if "oracle_id" in printing:
             raise NormalizationError(
@@ -491,7 +543,7 @@ def normalize_printing(
 
         result: list[Candidate] = []
 
-        for face_data in raw_faces:
+        for side_index, face_data in enumerate(raw_faces):
             if not isinstance(face_data, dict):
                 raise NormalizationError(
                     f"{printing_id}: invalid reversible face"
@@ -502,8 +554,9 @@ def normalize_printing(
             )
 
             context = f"{printing_id}/{oracle_id}"
+            issues: list[str] = []
             face = _face(
-                face_data, 0, vocabulary, context
+                face_data, 0, vocabulary, context, issue_codes=issues
             )
 
             result.append(
@@ -541,6 +594,10 @@ def normalize_printing(
                     legalities=_legality_map(
                         face_data, context
                     ),
+                    image_front=_normal_image(face_data),
+                    image_back=_normal_image(raw_faces[1 - side_index]),
+                    type_issues=tuple(sorted(set(issues))),
+                    **image_metadata,
                 )
             )
 
@@ -549,7 +606,13 @@ def normalize_printing(
         for candidate in result:
             previous = unique.get(candidate.oracle_id)
 
-            if previous is not None and previous != candidate:
+            if previous is not None and (
+                replace(previous, image_front=None, image_back=None)
+                != replace(candidate, image_front=None, image_back=None)
+            ):
+                # A reversible printing can put the same Oracle card on
+                # both sides, each with a different image. Swapped image
+                # URLs are not a difference in mechanical card data.
                 # Some reversible printings of Adventures present the
                 # creature and Adventure faces separately, but both faces
                 # reference the SAME Oracle identity.
@@ -603,6 +666,8 @@ def normalize_printing(
                             printing, printing_id
                         ),
                         faces=(front, back),
+                        image_back=candidate.image_front,
+                        type_issues=tuple(sorted(set(previous.type_issues + candidate.type_issues))),
                     )
                     continue
 
@@ -611,7 +676,9 @@ def normalize_printing(
                     f"{candidate.oracle_id!r} but disagree mechanically"
                 )
 
-            unique[candidate.oracle_id] = candidate
+            # For identical Oracle mechanics, keep the first physical side
+            # so front/back image URLs stay in the printing's orientation.
+            unique.setdefault(candidate.oracle_id, candidate)
 
         return tuple(unique.values())
 
@@ -620,9 +687,10 @@ def normalize_printing(
         printing, "oracle_id", printing_id
     )
 
+    issues: list[str] = []
     if raw_faces is None:
         faces = (
-            _face(printing, 0, vocabulary, printing_id),
+            _face(printing, 0, vocabulary, printing_id, issue_codes=issues),
         )
     else:
         if not isinstance(raw_faces, list) or not raw_faces:
@@ -654,11 +722,13 @@ def normalize_printing(
                     vocabulary,
                     f"{printing_id}/face{index}",
                     allow_missing_type_line=is_continuation,
+                    issue_codes=issues,
                 )
             )
 
         faces = tuple(faces_list)
 
+    image_front, image_back = _printing_images(printing)
     return (
         Candidate(
             oracle_id=oracle_id,
@@ -698,5 +768,9 @@ def normalize_printing(
             legalities=_legality_map(
                 printing, printing_id
             ),
+            image_front=image_front,
+            image_back=image_back,
+            type_issues=tuple(sorted(set(issues))),
+            **image_metadata,
         ),
     )

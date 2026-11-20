@@ -1,9 +1,9 @@
 # MTG CardDB — Python API Contract
 
-**Status:** Stable public Python API — `mtg-carddb` 1.2.1.\
+**Status:** Stable public Python API — `mtg-carddb` 1.3.0.\
 **Package/import:** `mtg_carddb`  
 **Primary interface:** `CardDatabase`  
-**Companion specification:** [`schema.md`](schema.md) (implemented SQLite schema version 1).
+**Companion specification:** [`schema.md`](schema.md) (schema v1 with an optional image table; older snapshots remain readable).
 **Future work:** [`roadmap.md`](roadmap.md) (compatibility policy and possible additions).
 
 ## 1. Purpose and design boundaries
@@ -78,6 +78,7 @@ These records are retrieved **separately**, rather than included in every `Card`
 | --- | --- | --- |
 | `Legality` | `format: str`, `status: str` | Current Scryfall legality classification for this database build |
 | `SetRarity` | `set_code: str`, `rarity: str`, `game: str` | One distinct historical observation, with all three dimensions coupled; the relationship lookup can expose **all** platforms independently of search defaults |
+| `CardImages` | `front: str | None`, `back: str | None` | `normal` Scryfall image URLs from a selected image-bearing printing; `back` is `None` when no distinct reverse image is available |
 | `Tagging` | `tag_slug: str`, `weight: str`, `annotation: str \| None` | **Direct** tag assignment; no fabricated ancestor tagging |
 | `Tag` | `slug: str`, `label: str`, `description: str \| None`, `aliases: frozenset[str]`, `parents: frozenset[str]`, `children: frozenset[str]` | Tag descriptions and **direct** graph neighbors; parent/child values are public slugs |
 | `SetInfo` | `code: str`, `name: str`, `set_type: str`, `released_at: str \| None`, `digital: bool` | Set-level Scryfall metadata; dates are `YYYY-MM-DD` |
@@ -98,6 +99,7 @@ The listed field names describe the stable 1.0 public record types. Internal dat
 | `db[oracle_id: str] -> Card` | Strict lookup by Oracle UUID; missing key raises `KeyError`. |
 | `db.get(oracle_id: str) -> Card \| None` | Optional lookup by Oracle UUID; missing key returns `None`. |
 | `db.resolve(oracle_ids: Iterable[str]) -> tuple[Card, ...]` | Resolve unique Oracle IDs in deterministic order. Unknown IDs raise `KeyError`; no silent dropping. |
+| `db.images_for(oracle_id: str) -> CardImages | None` | Return Scryfall `normal` image URLs for one selected ordinary-preferred printing. Unknown Oracle IDs return `None`; a known card with unavailable imagery, or an older snapshot without image metadata, returns `CardImages(front=None, back=None)`. No network access is made. The selected image printing is independent of mechanical and legality sources. |
 | `oracle_id in db` | Membership test for an Oracle ID string. |
 | `len(db)` | Number of Oracle identities. |
 | `db.info() -> DatabaseInfo` | Immutable database and source metadata. |
@@ -123,7 +125,7 @@ Both lifecycle functions are exported from `mtg_carddb`:
 | `initialize_database(target_path: str \| Path, *, on_progress: ProgressCallback \| None = None) -> DatabaseWorkflowResult` | Acquire Scryfall sources, build a validated snapshot, and install a new database. Refuses to overwrite an existing destination. |
 | `update_database(target_path: str \| Path, *, on_progress: ProgressCallback \| None = None) -> DatabaseWorkflowResult` | Requires an existing, readable, compatible CardDB database. Builds and validates a replacement before guarded activation. |
 
-`DatabaseWorkflowResult` contains `operation` (`"init"` or `"update"`), `path: Path`, and `build: SnapshotBuildResult`, which contains import counts and the output path.
+`DatabaseWorkflowResult` contains `operation` (`"init"` or `"update"`), `path: Path`, and `build: SnapshotBuildResult`, which contains import counts, the output path, and `type_line_recoveries` (a tuple of `(kind, count)` pairs) with up to 12 `type_line_examples` (tuples of `(kind, printing_id, original_type_line)`). The CLI displays this information after successful initialization or update when unusual source type lines were recovered. These are build diagnostics, not mutable card records.
 
 The optional callback receives immutable `WorkflowProgress(stage, status, detail)` events.
 
@@ -458,7 +460,7 @@ The public `Card` has **one selected normalized face arrangement**, not an inven
 Select **one coherent candidate** per Oracle ID, not an arbitrary first record and not a mixture of fields taken opportunistically from incompatible printings.
 
 - **Eligibility:** A candidate missing required Oracle-level characteristics is incomplete. It cannot supersede a complete candidate merely because it is newer. Validate names, type line, mana value, color identity, keywords, reserved status, and any face-specific required fields against the selected source layout.
-- **Preference:** Among complete, semantically compatible candidates, follow the companion schema's deterministic priority: **non-reversible first**, then English (`lang == "en"`), then newest `released_at`, then lexically ordered Scryfall printing `id` for ties. An optional preference for paper or non-gold-bordered printings is *not* silently added to this frozen ordering; see legality treatment below.
+- **Preference:** Among complete, semantically compatible candidates, follow the companion schema's deterministic priority: **catalog-verified type line first**, then non-reversible, English (`lang == "en"`), newest `released_at`, then lexically ordered Scryfall printing `id` for ties. An optional preference for paper or non-gold-bordered printings is *not* silently added to this frozen ordering; see legality treatment below.
 - **Cross-check:** Compare normalized non-print-specific mechanical facts across *reliable candidates* for the same Oracle ID. Detect true disagreements rather than treating every missing optional field as a contradiction. A change in **physical `layout` alone** is expected and is not an Oracle-characteristic conflict.
 - **No accidental duplication:** If a reversible printing is named `Blood Crypt // Blood Crypt` but a complete ordinary printing of the same Oracle identity exists, the ordinary `Blood Crypt` representation wins. Do **not** globally rewrite names of the form `X // X`: that is also a valid Scryfall name form for certain art-series and double-faced-token records.
 - **Unresolvable identities:** If a reversible-only Oracle identity lacks required independent characteristics, fail strict normalization with diagnostics; do not assign both sides the root's combined characteristics, silently omit the identity, or silently fill it using rules-text guesses.
@@ -509,7 +511,29 @@ Applications remain free to create their own sets and combine them with CardDB's
 
 ## 11. Compatibility boundary
 
-This document describes the stable **1.x library-facing API** (including the additive v1.1 name-preloading and v1.2 suggestion/tag-membership methods) over SQLite schema version 1. Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
+This document describes the stable **1.x library-facing API** (including v1.1 name-preloading, v1.2 suggestions/tag membership, and v1.3 image-link methods) over schema v1 (including snapshots with or without the optional image table). Changes to public method names, signatures, return types, record fields, query meanings, error categories, or missing-value semantics are compatibility-affecting and normally require a new major release. Backward-compatible additions and bug fixes can be released within 1.x.
 
 The following are **not** public compatibility commitments: SQLite query plans, internal bit allocations, memory/index layout, hydration timing, cache hit behavior, caching object identity, and module boundaries of the internal implementation. Database schema compatibility is governed separately by the frozen `schema.md` and SQLite's `user_version`.
 
+
+## Representative printing images (schema v2)
+
+```python
+from mtg_carddb import CardDatabase
+
+with CardDatabase.open() as db:
+    for oracle_id in db.by_name("Sol Ring"):
+        images = db.images_for(oracle_id)
+        if images and images.front:
+            print(images.front)
+        # images.back is None for ordinary single-sided printings.
+```
+
+The image representative is selected independently of the Oracle mechanics
+representative: first choose a printing with a usable Scryfall normal image,
+then prefer source-clean type lines, non-reversible printings, English, most recent release, and finally
+printing ID for deterministic ties. A double-sided printing can supply both
+front and back image URLs; split/adventure cards ordinarily use one root image.
+Only URL strings and the selected source printing ID are stored, not image
+files or a complete printing inventory. Existing pre-image schema-v1 snapshots open
+normally and return empty `CardImages` values until rebuilt.

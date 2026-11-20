@@ -43,6 +43,17 @@ def write_representative(
                 None if card.game_changer is None else int(card.game_changer),
             ),
         )
+        if selected.images.front is not None:
+            assert selected.image_printing_id is not None
+            connection.execute(
+                "INSERT INTO card_images "
+                "(oracle_id, printing_id, front_url, back_url) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    card.oracle_id, selected.image_printing_id,
+                    selected.images.front, selected.images.back,
+                ),
+            )
         for face in card.faces:
             connection.execute(
                 "INSERT INTO faces (oracle_id, face_index, name, type_line, "

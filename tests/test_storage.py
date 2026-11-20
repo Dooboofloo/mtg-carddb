@@ -1,4 +1,4 @@
-"""SQLite adapter contract tests against a synthetic schema-v1 database."""
+"""SQLite adapter contract tests against synthetic schema-v1 data."""
 
 import sqlite3
 from dataclasses import FrozenInstanceError

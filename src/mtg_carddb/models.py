@@ -226,6 +226,22 @@ class Card:
 
 
 @dataclass(frozen=True, slots=True)
+class CardImages:
+    """Normal-resolution image URLs for a selected Scryfall printing.
+
+    A missing URL is represented by None. This is also the value returned
+    for cards in legacy snapshots without image metadata.
+    """
+
+    front: str | None = None
+    back: str | None = None
+
+    def __post_init__(self) -> None:
+        _optional_str(self.front, "front")
+        _optional_str(self.back, "back")
+
+
+@dataclass(frozen=True, slots=True)
 class Legality:
     format: str
     status: str

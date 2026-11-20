@@ -33,6 +33,16 @@ CREATE TABLE cards (
     game_changer    INTEGER CHECK (game_changer IN (0, 1))
 );
 
+-- A single selected image-bearing printing per Oracle ID, not printing history.
+-- No row means images were unavailable from the selected Scryfall bulk data.
+CREATE TABLE card_images (
+    oracle_id    TEXT PRIMARY KEY,
+    printing_id  TEXT NOT NULL,
+    front_url    TEXT NOT NULL,
+    back_url     TEXT,
+    FOREIGN KEY (oracle_id) REFERENCES cards(oracle_id) ON DELETE CASCADE
+);
+
 -- Normalized face rows, including one face for ordinarily single-faced cards.
 CREATE TABLE faces (
     oracle_id       TEXT NOT NULL,
@@ -164,7 +174,7 @@ class SchemaBuildError(RuntimeError):
 
 
 def create_schema(connection: sqlite3.Connection) -> None:
-    """Create schema v1 transactionally in an otherwise empty SQLite file.
+    """Create schema v1 (with optional images) transactionally in an otherwise empty SQLite file.
 
     The caller owns the connection. A pre-existing schema or nonzero
     user_version is rejected; the function never migrates or drops tables.

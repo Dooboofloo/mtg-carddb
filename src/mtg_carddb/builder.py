@@ -56,6 +56,8 @@ class SnapshotBuildResult:
     art_only_oracle_ids: int
     excluded_art_taggings: int
     provenance_sources: int = 0
+    type_line_recoveries: tuple[tuple[str, int], ...] = ()
+    type_line_examples: tuple[tuple[str, str, str], ...] = ()
 
 
 def _validate_counts(
@@ -275,4 +277,6 @@ def build_snapshot(
             excluded_by_tag.values()
         ),
         provenance_sources=provenance_count,
+        type_line_recoveries=getattr(card_stats, "type_line_recoveries", ()),
+        type_line_examples=getattr(card_stats, "type_line_examples", ()),
     )

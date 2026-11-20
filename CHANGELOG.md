@@ -4,9 +4,43 @@ Notable user-facing changes to MTG CardDB are recorded here.
 
 The project follows a `MAJOR.MINOR.PATCH` version scheme. Releases below 1.0.0 may refine the public API, while SQLite schema compatibility is tracked separately using `PRAGMA user_version`.
 
-## Unreleased
+## 1.3.0 — Representative images and resilient ingestion
 
-No changes recorded yet.
+### Added
+
+- `CardDatabase.images_for(oracle_id)` and immutable `CardImages(front, back)`
+  return a chosen Scryfall normal-resolution printing image (two URLs for
+  physical double-faced cards). No image downloads or printing inventory.
+- Recover missing type/subtype delimiters using the type and subtype catalogs
+  **only when one unambiguous interpretation exists**. Recognize alternate
+  separators and preserve unrecognized, explicitly delimited subtype labels
+  without inventing corrected spellings; retain the original printed text.
+- Report structured type-line recovery counts and bounded source examples
+  in `IngestionStats`, `SnapshotBuildResult`, and successful CLI build output.
+
+### Improved
+
+- Prefer ordinary English paper artwork over promotional, Secret Lair,
+  digital-only, and alternate-treatment printings; choose the newest eligible
+  image with deterministic tie-breaking and allow special-print fallback.
+  The preference is approximate, not a claim of matching Scryfall's private
+  display-ranking rules exactly.
+- Keep the selected Oracle mechanics and legality independent of image source.
+  Reversible faces with the same Oracle ID can have different images without
+  creating artificial mechanical conflicts.
+- Prefer catalog-verified mechanics over recovered source anomalies when
+  selecting canonical Oracle records; continue to reject actual conflicting
+  rules text and other non-type mechanical data.
+
+### Compatibility
+
+- No additional runtime dependencies; SQLite `user_version` remains 1.
+  The `card_images` table is optional, so older snapshots remain readable and
+  older CardDB readers ignore the extra table on rebuilt snapshots.
+- Existing snapshots return `CardImages(None, None)` for known cards until
+  rebuilt; no in-place migration is required. A fresh `init` or `update` is
+  necessary to populate representative images.
+- Existing CardDB query APIs and result types remain unchanged.
 
 ## 1.2.1 — Scryfall source compatibility and cleanup
 

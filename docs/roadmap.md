@@ -41,7 +41,19 @@ card's direct or hierarchical Oracle-tag membership. Neither changes the
 existing set-returning membership queries or forces exact lookups to load a
 name catalog. Both work with schema-v1 snapshots, with no new runtime packages.
 
-## Possible work after 1.2
+## v1.3.0: representative images and resilient source imports
+
+Version 1.3.0 introduces `images_for()` with Scryfall `normal` URLs from an
+ordinary-preferred printing, without adding a full printing inventory. The
+optional `card_images` table retains compatibility with schema-v1 snapshots.
+
+Vocabulary-aware type-line normalization now recovers uniquely inferable
+missing separators and preserves unfamiliar subtype labels when an explicit
+delimiter identifies the subtype section. Source text remains intact, while
+build results expose recovery counts and bounded examples. Ambiguous
+structures remain errors; no new runtime dependencies are required.
+
+## Possible work after 1.3
 
 These are candidates, not prerequisites or a fixed release schedule.
 

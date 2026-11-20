@@ -76,6 +76,46 @@ unaffected. Poor matches may yield no suggestions.
 Existing schema-v1 databases work unchanged; no `init` or `update` is required
 to use the name-lookup or suggestion paths.
 
+## Representative printing images
+
+```python
+with CardDatabase.open() as db:
+    ids = db.by_name("Sol Ring")
+    for oracle_id in ids:
+        images = db.images_for(oracle_id)
+        print(images.front if images else None)
+        print(images.back if images else None)
+```
+
+`images_for()` returns `CardImages(front, back)` with Scryfall's `normal`
+image URLs. Single-sided printings have `back=None`. Older databases
+remain readable; they return `CardImages(None, None)` for known cards until
+refreshed with an image-capable builder. URLs are stored locally, but image content
+is not downloaded or cached by CardDB.
+
+The chosen image is a recent **ordinary English paper printing** when one is
+available; promotional, Secret Lair, digital-only, and alternate-treatment
+versions rank lower. For example, this prefers the Innistrad Remastered
+*Delver of Secrets* over a newer Secret Lair edition. This is a deterministic
+local approximation of Scryfall's default display choice, **not an exact
+replication** of an undocumented ranking algorithm. If a card has only special
+printings, those images remain eligible.
+
+## Resilient type-line imports
+
+Scryfall bulk records occasionally contain nonstandard type-line separators,
+missing separators, or novelty/unknown subtype labels. During `init` and
+`update`, CardDB normalizes recognized alternate separators, infers a missing
+separator **only when exactly one split is fully supported by type catalogs**,
+and preserves unfamiliar subtypes verbatim when the separator is explicit.
+It does not guess unknown card types or autocorrect misspellings. Original
+Scryfall type-line text remains available on card and face records.
+
+The build result records structured recovery counts and up to twelve examples;
+`mtg-carddb init` and `update` display them when encountered. Truly ambiguous
+or structurally invalid records still fail validation rather than silently
+inventing card attributes or omitting cards.
+
 ## Query cards
 
 ```python
@@ -139,6 +179,8 @@ Tags and their hierarchy depend on the installed Scryfall Oracle Tags snapshot. 
 - **Oracle Tags:** direct classification assignments, descendant expansion, and lightweight single-card `has_tag()` checks.
 - **Legality and printing history:** current Scryfall format statuses and historical set/rarity/game observations, without conflating unrelated printings.
 - **Multifaced cards:** normalized, immutable card and face records, including reversible layouts.
+- **Representative art:** local Scryfall `normal` front/back image URLs with ordinary-printing preference; no printing inventory or image downloads.
+- **Resilient imports:** conservative recovery of known type-line errors with diagnostic counts rather than manual source exceptions.
 - **SQLite snapshots:** read-only access, explicit initialization/updates, source provenance, and freshness diagnostics.
 - **CLI and Python lifecycle APIs:** `init`, `update`, `info`, and `locks`, with optional custom database paths.
 
@@ -152,7 +194,7 @@ CardDB is a mechanical card-data library, **not** a rules engine, full collectio
 - [Roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) — current milestones and possible follow-on work
 - [Contributing](https://github.com/Dooboofloo/mtg-carddb/blob/main/CONTRIBUTING.md) · [Changelog](https://github.com/Dooboofloo/mtg-carddb/blob/main/CHANGELOG.md) · [Release guide](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/releasing.md)
 
-**Version 1.2.1** fixes a Scryfall type-line import edge case and Windows build cleanup. Version 1.2.0 added fuzzy name suggestions and single-card hierarchical tag checks on top of the fast v1.1 lookup path, while preserving the stable 1.x API over SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
+**Version 1.3.0** adds representative printing images and catalog-aware, diagnostic type-line recovery. Version 1.2.1 fixed specific Scryfall import anomalies and Windows cleanup; v1.2.0 added fuzzy suggestions and single-card tag membership on top of the fast v1.1 lookup path. The stable 1.x API remains based on SQLite schema v1. Public names, return types, and documented query semantics follow semantic versioning: compatible changes can ship in 1.x, while intentionally incompatible API changes normally require a new major version. Database files have their own schema version and compatibility checks. See the [roadmap](https://github.com/Dooboofloo/mtg-carddb/blob/main/docs/roadmap.md) for future directions.
 
 ## Development
 

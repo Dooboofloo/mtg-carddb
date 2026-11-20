@@ -29,7 +29,7 @@ def test_staging_database_has_exact_schema_and_foreign_keys(tmp_path):
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         )}
         assert names == {
-            "cards", "faces", "face_types", "card_keywords",
+            "cards", "card_images", "faces", "face_types", "card_keywords",
             "card_legalities", "tags", "tag_aliases", "tag_relationships",
             "card_tags", "sets", "card_set_rarities", "database_metadata",
             "source_metadata",

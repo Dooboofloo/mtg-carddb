@@ -234,3 +234,25 @@ CardDB remains usable offline with stale source data. To inspect the recorded so
 **Download or build failure:** Check the CLI error. A new snapshot is constructed separately and activated only after validation; an update failure before activation should leave the existing database available. Repeated failures may reflect upstream changes, connection problems, disk space, permissions, or stale locks.
 
 For reproducible bug reports, include the library/Python versions, operating system, relevant CLI output, and a minimal example. Report issues in the [GitHub issue tracker](https://github.com/Dooboofloo/mtg-carddb/issues).
+
+## Images and source type-line diagnostics (v1.3+)
+
+```python
+with CardDatabase.open() as db:
+    card_id = next(iter(db.by_name("Delver of Secrets")))
+    image = db.images_for(card_id)
+    print(image.front if image else None)
+    print(image.back if image else None)
+```
+
+Image links come from a preferred regular Scryfall printing, rather than
+necessarily the newest promotional edition. The exact image choice is a
+reproducible local heuristic. Pre-1.3 databases still work, but return
+`CardImages(None, None)` for known cards without stored image URLs. Run
+`mtg-carddb update` after upgrading to populate the new optional table.
+
+Type-line recovery warnings from a successful build appear at the end of
+`init` or `update`. Recovery totals and up to 12 source examples are also
+available on `DatabaseWorkflowResult.build.type_line_recoveries` and
+`.type_line_examples`. Unknown left-hand card types and truly ambiguous
+missing delimiters continue to cause explicit build failures.

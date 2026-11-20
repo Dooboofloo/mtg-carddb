@@ -3,7 +3,7 @@
 
 The normal Scryfall catalogs remain the primary type vocabulary.
 These additions cover historical, supplemental, and novelty printings.
-New unknown type strings must still be reviewed explicitly.
+New unrecognized type strings are handled by conservative structural recovery.
 """
 
 SUPPLEMENTAL_SUPERTYPES = frozenset({"Host"})
@@ -172,15 +172,6 @@ def parse_line_alias(type_line: str) -> str:
         # UNK's The Alien Spellslayer has a source subtype typo.
         # Preserve the printed string; normalize only its indexed type.
         return "Legendary Creature — Alien Performer"
-
-    # Source-verified missing separators in PUNK and SLD printings.
-    # Only these exact strings are fixed; do not infer arbitrary divisions
-    # between card types and subtypes in otherwise invalid source lines.
-    if type_line == "Legendary Creature Human Advisor":
-        return "Legendary Creature — Human Advisor"
-
-    if type_line == "Legendary Creature Human Noble":
-        return "Legendary Creature — Human Noble"
 
     # Some source type lines spell the type/subtype divider as " -- ".
     # Normalize only that delimiter for indexing. Vocabulary validation

@@ -265,13 +265,11 @@ def test_partial_ordinary_candidate_tracks_missing_required_facts(vocab):
 
 
 def test_invalid_card_types_and_subtypes_are_not_guessed(vocab):
-    with pytest.raises(
-        NormalizationError, match="unrecognized subtype"
-    ):
-        normalize_printing(
-            printing(type_line="Creature — NotKnown"),
-            vocab,
-        )
+    unknown, = normalize_printing(
+        printing(type_line="Creature — NotKnown"), vocab
+    )
+    assert unknown.faces[0].subtypes == frozenset({"NotKnown"})
+    assert unknown.type_issues == ("unknown_subtype",)
 
     with pytest.raises(
         NormalizationError, match="unrecognized type"
@@ -580,4 +578,4 @@ def test_subtype_parser_rejects_unsatisfiable_sequence():
         NormalizationError,
         match="unrecognized subtype",
     ):
-        vocabulary.parse("Creature — A B C")
+        vocabulary.interpret("Creature — A B C", strict=True)

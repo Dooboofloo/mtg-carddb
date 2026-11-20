@@ -238,6 +238,10 @@ def _print_build(result: object) -> None:
         f"Source records: "
         f"{result.build.provenance_sources}"
     )
+    for kind, count in getattr(result.build, "type_line_recoveries", ()):
+        print(f"Recovered type lines ({kind}): {count}")
+    for kind, printing_id, source_line in getattr(result.build, "type_line_examples", ()):
+        print(f"  {kind}: {printing_id}: {source_line}")
 
 
 def _print_info(

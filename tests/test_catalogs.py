@@ -478,7 +478,7 @@ def test_unrecognized_types_still_fail(type_line):
     vocabulary = make_type_vocabulary(sample_catalogs())
 
     with pytest.raises(NormalizationError):
-        vocabulary.parse(type_line)
+        vocabulary.interpret(type_line, strict=True)
 
 
 def test_realistic_planar_printing_normalizes():

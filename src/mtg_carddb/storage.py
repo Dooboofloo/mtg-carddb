@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .indexes import IndexStore
 from .models import (
-    Card, CardFace, DatabaseInfo, Legality, SetInfo, SetRarity,
+    Card, CardFace, CardImages, DatabaseInfo, Legality, SetInfo, SetRarity,
     SourceInfo, Tag, Tagging,
 )
 
@@ -47,7 +47,7 @@ class DatabaseOpenError(RuntimeError):
 
 
 class DatabaseCompatibilityError(DatabaseOpenError):
-    """A SQLite file does not conform to CardDB schema v1."""
+    """A SQLite file does not conform to a supported CardDB schema."""
 
 
 class DatabaseClosedError(RuntimeError):
@@ -75,6 +75,8 @@ class SQLiteStore:
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection: sqlite3.Connection | None = connection
+        self._schema_version: int = 0
+        self._has_images: bool = False
 
     @classmethod
     def open(cls, path: str | Path) -> SQLiteStore:
@@ -130,11 +132,24 @@ class SQLiteStore:
                     raise DatabaseCompatibilityError(
                         f"table {table!r} missing required columns: {sorted(missing)}"
                     )
+            self._has_images = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='card_images'"
+            ).fetchone() is not None
+            if self._has_images:
+                image_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(card_images)")
+                }
+                missing = {"oracle_id", "printing_id", "front_url", "back_url"} - image_columns
+                if missing:
+                    raise DatabaseCompatibilityError(
+                        f"table 'card_images' missing required columns: {sorted(missing)}"
+                    )
             rows = self._rows("SELECT id FROM database_metadata")
             if len(rows) != 1 or rows[0]["id"] != 1:
                 raise DatabaseCompatibilityError(
                     "database_metadata must contain exactly the build row id=1"
                 )
+            self._schema_version = version
         except sqlite3.DatabaseError as exc:
             raise DatabaseCompatibilityError("malformed CardDB SQLite schema") from exc
 
@@ -161,7 +176,7 @@ class SQLiteStore:
     def ids_by_name(self, folded_name: str) -> frozenset[str]:
         """Search a canonical card name or any face name without hydrating indexes.
 
-        This scans the name columns in SQLite on schema-v1 snapshots. It avoids
+        This scans the name columns in SQLite on supported snapshots. It avoids
         materializing the complete name index for isolated lookups.
         """
         return frozenset(row[0] for row in self._conn().execute(
@@ -170,6 +185,23 @@ class SQLiteStore:
             "WHERE carddb_casefold(name) = ?",
             (folded_name, folded_name),
         ))
+
+    def images_for(self, oracle_id: str) -> CardImages | None:
+        """Return image URLs, or None for an unknown Oracle ID.
+
+        Older schema-v1 databases without the optional images table remain readable.
+        """
+        if not self.has_card(oracle_id):
+            return None
+        if not self._has_images:
+            return CardImages()
+        row = self._conn().execute(
+            "SELECT front_url, back_url FROM card_images WHERE oracle_id = ?",
+            (oracle_id,),
+        ).fetchone()
+        if row is None:
+            return CardImages()
+        return CardImages(row["front_url"], row["back_url"])
 
     def all_ids(self) -> frozenset[str]:
         return frozenset(row["oracle_id"] for row in self._rows("SELECT oracle_id FROM cards"))
@@ -235,7 +267,7 @@ class SQLiteStore:
             "source_url, sha256, record_count FROM source_metadata"
         ))
         return DatabaseInfo(
-            schema_version=SCHEMA_VERSION, created_at=row["created_at"],
+            schema_version=self._schema_version, created_at=row["created_at"],
             builder_version=row["builder_version"], sources=sources,
         )
 

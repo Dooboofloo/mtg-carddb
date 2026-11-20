@@ -23,6 +23,7 @@ from .freshness import (
 from .models import (
     Card,
     CardFace,
+    CardImages,
     DatabaseInfo,
     Legality,
     SetInfo,
@@ -52,6 +53,7 @@ __all__ = [
     "default_database_path",
     "Card",
     "CardFace",
+    "CardImages",
     "DatabaseInfo",
     "Legality",
     "SetInfo",

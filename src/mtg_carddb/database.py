@@ -11,7 +11,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Literal
 
-from .models import Card, DatabaseInfo, Legality, SetInfo, SetRarity, Tag, Tagging
+from .models import Card, CardImages, DatabaseInfo, Legality, SetInfo, SetRarity, Tag, Tagging
 from .storage import SQLiteStore
 from .freshness import (
     DEFAULT_STALE_AFTER_DAYS,
@@ -222,6 +222,18 @@ class CardDatabase:
         if not isinstance(oracle_id, str):
             raise TypeError("oracle_id must be a string")
         return self._store.load_card(oracle_id)
+
+    def images_for(self, oracle_id: str) -> CardImages | None:
+        """Return normal image URLs for a selected printing of an Oracle card.
+
+        An unknown Oracle ID returns None. Known cards without imagery,
+        including records in schema-v1 snapshots, return CardImages(None, None).
+        No network access or image download occurs.
+        """
+        self._ensure_open()
+        if not isinstance(oracle_id, str):
+            raise TypeError("oracle_id must be a string")
+        return self._store.images_for(oracle_id)
 
     def resolve(self, oracle_ids: Iterable[str]) -> tuple[Card, ...]:
         self._ensure_open()

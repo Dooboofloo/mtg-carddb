@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 
-from .models import Card, Legality
+from .models import Card, CardImages, Legality
 from .normalization import Candidate, NormalizationError
 
 
@@ -25,10 +25,13 @@ class SelectedRepresentative:
     mechanics_printing_id: str
     legality_printing_id: str
     aggregated_formats: frozenset[str] = frozenset()
+    images: CardImages = CardImages()
+    image_printing_id: str | None = None
 
 
-def _rank(candidate: Candidate) -> tuple[bool, bool, int, str]:
+def _rank(candidate: Candidate) -> tuple[bool, bool, bool, int, str]:
     return (
+        bool(candidate.type_issues),
         candidate.reversible,
         candidate.lang != "en",
         -date.fromisoformat(candidate.released_at).toordinal(),
@@ -50,6 +53,8 @@ _CORE_FIELDS = (
 
 _FACE_FIELDS = (
     "type_line",
+    "supertypes",
+    "types",
     "mana_cost",
     "oracle_text",
     "colors",
@@ -61,6 +66,34 @@ _FACE_FIELDS = (
     "hand_modifier",
     "life_modifier",
 )
+
+def _image_rank(candidate: Candidate) -> tuple[object, ...]:
+    """Prefer normal English paper cards over special treatments, then newest.
+
+    This approximates Scryfall's preferred display printing; their exact
+    selection policy is not published in the bulk records.
+    """
+    special_set = candidate.image_set_code in {"sld", "plst"}
+    special_category = candidate.set_type in {
+        "box", "promo", "memorabilia", "masterpiece", "token",
+        "minigame", "from_the_vault", "premium_deck", "spellbook",
+    }
+    alternate_treatment = (
+        candidate.image_full_art
+        or any(effect in {"showcase", "extendedart", "inverted", "borderless"}
+               for effect in candidate.image_frame_effects)
+        or candidate.border_color == "borderless"
+    )
+    return (
+        candidate.lang != "en",
+        bool(candidate.image_games) and "paper" not in candidate.image_games,
+        special_set or candidate.image_promo or special_category,
+        alternate_treatment,
+        candidate.reversible,
+        -date.fromisoformat(candidate.released_at).toordinal(),
+        candidate.printing_id,
+    )
+
 
 _OLDSCHOOL_PRIORITY = {
     "not_legal": 0,
@@ -97,6 +130,8 @@ def _validate_consistency(
             )
 
         for field in _CORE_FIELDS:
+            if field == "type_line" and candidate.type_issues:
+                continue
             value = getattr(candidate, field)
 
             if value is None:
@@ -119,6 +154,8 @@ def _validate_consistency(
 
         for face in candidate.faces:
             for field in _FACE_FIELDS:
+                if field == "type_line" and candidate.type_issues:
+                    continue
                 value = getattr(face, field)
 
                 if value is None:
@@ -142,7 +179,7 @@ def select_representative(
 ) -> SelectedRepresentative:
     """Select independent mechanical and legality projections for one ID.
 
-    Mechanical priority: complete, nonreversible, English, newest, ID.
+    Mechanical priority: complete, catalog-verified, nonreversible, English, newest, ID.
     Legality priority: non-gold/non-memorabilia, English, newest, ID.
 
     Equally eligible legality conflicts and mechanical disagreements fail.
@@ -260,11 +297,24 @@ def select_representative(
 
     legalities.sort(key=lambda entry: (entry.format, entry.status))
 
+    # Images are printing-specific, so choose a complete image-bearing
+    # printing independently from the Oracle mechanics/legality projections.
+    # Prefer ordinary artwork, independently of mechanical/legality selection.
+    image_candidates = [item for item in group if item.image_front is not None]
+    image_source = min(image_candidates, key=_image_rank) if image_candidates else None
+
     return SelectedRepresentative(
         card=card,
         legalities=tuple(legalities),
         mechanics_printing_id=mechanics.printing_id,
         legality_printing_id=legality_source.printing_id,
+        images=(
+            CardImages(image_source.image_front, image_source.image_back)
+            if image_source is not None else CardImages()
+        ),
+        image_printing_id=(
+            image_source.printing_id if image_source is not None else None
+        ),
         aggregated_formats=(
             frozenset({"oldschool"})
             if len(oldschool_states) > 1

@@ -101,11 +101,10 @@ def test_audited_type_lines(source, supertypes, types, subtypes):
 @pytest.mark.parametrize(
     "source",
     [
-        "Creature — NotKnown",
         "Imaginary",
-        "Artifact — Definitely Not A Known Subtype",
-        "Legendary Creature -- NotARealSubtype",
-        "Legendary Creature Human Wizard",
+        "Creature — ",
+        "Unknown — Human",
+        "Legendary Creature AnUnrecognizedSubtype",
     ],
 )
 def test_unknown_type_lines_remain_errors(source):

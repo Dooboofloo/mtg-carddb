@@ -8,6 +8,7 @@ Sets must have been populated from an authoritative catalog beforehand.
 from __future__ import annotations
 
 import json
+from collections import Counter
 import sqlite3
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -30,6 +31,10 @@ class IngestionStats:
     oracle_cards: int
     historical_observations: int
     excluded_printings: int = 0
+    # (recovery kind, affected source printings), bounded by issue kinds.
+    type_line_recoveries: tuple[tuple[str, int], ...] = ()
+    # At most 12 (kind, printing ID, original face type line) examples.
+    type_line_examples: tuple[tuple[str, str, str], ...] = ()
 
 
 def _json_default(value: object) -> list[str]:
@@ -61,6 +66,9 @@ def _decode(payload: str) -> Candidate:
                 face[field] = frozenset(face[field])
         faces.append(CardFace(**face))
     raw["faces"] = tuple(faces)
+    for key in ("image_frame_effects", "image_games", "type_issues"):
+        if key in raw:
+            raw[key] = tuple(raw[key])
     if raw["legalities"] is not None:
         raw["legalities"] = tuple(Legality(**item) for item in raw["legalities"])
     return Candidate(**raw)
@@ -142,6 +150,8 @@ def ingest_printings(
         printing_count = 0
         candidate_count = 0
         excluded_count = 0
+        type_recoveries: Counter[str] = Counter()
+        type_examples: list[tuple[str, str, str]] = []
 
         for printing in printings:
             printing_count += 1
@@ -151,6 +161,11 @@ def ingest_printings(
                 continue
 
             candidates = normalize_printing(printing, vocabulary)
+            for kind in sorted({kind for candidate in candidates for kind in candidate.type_issues}):
+                type_recoveries[kind] += 1
+                if len(type_examples) < 12:
+                    face = next(c.faces[0] for c in candidates if kind in c.type_issues)
+                    type_examples.append((kind, str(printing.get("id", "")), face.type_line))
             candidate_count += len(candidates)
             connection.executemany(
                 "INSERT INTO temp.carddb_candidate_spool "
@@ -214,7 +229,10 @@ def ingest_printings(
         connection.execute("DROP TABLE temp.carddb_candidate_spool")
         connection.execute("DROP TABLE temp.carddb_history_spool")
         connection.execute("RELEASE SAVEPOINT carddb_ingest")
-        return IngestionStats(printing_count, candidate_count, card_count, observations, excluded_count)
+        return IngestionStats(
+            printing_count, candidate_count, card_count, observations,
+            excluded_count, tuple(sorted(type_recoveries.items())), tuple(type_examples),
+        )
     except BaseException:
         connection.execute("ROLLBACK TO SAVEPOINT carddb_ingest")
         connection.execute("RELEASE SAVEPOINT carddb_ingest")
